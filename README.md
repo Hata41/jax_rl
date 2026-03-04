@@ -224,6 +224,12 @@ uv run --extra dev pytest -q
 uv run --extra dev pytest tests/test_onnx_export.py -q
 ```
 
+### ONNX operator/component coverage reference
+
+For the authoritative list of supported `jax2onnx` operators and `flax.nnx` API coverage, see the `jax2onnx` repository documentation at:
+
+- `docs/user_guide/flax_api_coverage.md`
+
 ## Notes
 
 - Supported action spaces: `Discrete` and `MultiDiscrete`.
