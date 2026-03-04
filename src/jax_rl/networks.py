@@ -164,56 +164,17 @@ class ActorHead(nnx.Module):
         return tuple(branch(features) for branch in self.branches)
 
 
-class ONNXSafeAttention(nnx.Module):
-    def __init__(self, dim: int, num_heads: int, rngs: nnx.Rngs):
-        if dim % num_heads != 0:
-            raise ValueError(f"dim ({dim}) must be divisible by num_heads ({num_heads}).")
-        self.dim = int(dim)
-        self.num_heads = int(num_heads)
-        self.head_dim = int(dim // num_heads)
-        self.q_proj = _linear(dim, dim, scale=1.0, rngs=rngs)
-        self.k_proj = _linear(dim, dim, scale=1.0, rngs=rngs)
-        self.v_proj = _linear(dim, dim, scale=1.0, rngs=rngs)
-        self.out_proj = _linear(dim, dim, scale=1.0, rngs=rngs)
-
-    def __call__(self, q: Array, k: Array, v: Array, mask: Array | None = None) -> Array:
-        batch_size, q_len, _ = q.shape
-        k_len = k.shape[1]
-
-        q_proj = self.q_proj(q)
-        k_proj = self.k_proj(k)
-        v_proj = self.v_proj(v)
-
-        q_heads = q_proj.reshape((batch_size, q_len, self.num_heads, self.head_dim))
-        k_heads = k_proj.reshape((batch_size, k_len, self.num_heads, self.head_dim))
-        v_heads = v_proj.reshape((batch_size, k_len, self.num_heads, self.head_dim))
-
-        q_heads = jnp.transpose(q_heads, (0, 2, 1, 3))
-        k_heads = jnp.transpose(k_heads, (0, 2, 1, 3))
-        v_heads = jnp.transpose(v_heads, (0, 2, 1, 3))
-
-        k_t = jnp.transpose(k_heads, (0, 1, 3, 2))
-        scale = jnp.asarray(self.head_dim, dtype=jnp.float32) ** -0.5
-        scores = jnp.matmul(q_heads, k_t) * scale
-
-        if mask is None:
-            mask = jnp.ones((batch_size, 1, q_len, k_len), dtype=jnp.bool_)
-        else:
-            mask = jnp.asarray(mask, dtype=jnp.bool_)
-
-        masked_scores = jnp.where(mask, scores, jnp.asarray(-1e9, dtype=scores.dtype))
-        weights = jax.nn.softmax(masked_scores, axis=-1)
-        attended = jnp.matmul(weights, v_heads)
-
-        attended = jnp.transpose(attended, (0, 2, 1, 3))
-        attended = attended.reshape((batch_size, q_len, self.dim))
-        return self.out_proj(attended)
-
-
 class TransformerBlock(nnx.Module):
     def __init__(self, dim: int, num_heads: int, rngs: nnx.Rngs):
         self.norm_attn = nnx.LayerNorm(num_features=dim, rngs=rngs)
-        self.attn = ONNXSafeAttention(dim=dim, num_heads=num_heads, rngs=rngs)
+        self.attn = nnx.MultiHeadAttention(
+            num_heads=num_heads,
+            in_features=dim,
+            qkv_features=dim,
+            out_features=dim,
+            decode=False,
+            rngs=rngs,
+        )
         self.norm_mlp = nnx.LayerNorm(num_features=dim, rngs=rngs)
         self.mlp_fc1 = _linear(dim, dim * 4, scale=jnp.sqrt(2.0), rngs=rngs)
         self.mlp_fc2 = _linear(dim * 4, dim, scale=1.0, rngs=rngs)
@@ -222,7 +183,8 @@ class TransformerBlock(nnx.Module):
         q_norm = self.norm_attn(q)
         k_norm = self.norm_attn(k)
         v_norm = self.norm_attn(v)
-        x = q + self.attn(q_norm, k_norm, v_norm, mask=mask)
+        attn_mask = None if mask is None else jnp.asarray(mask, dtype=jnp.bool_)
+        x = q + self.attn(q_norm, k_norm, v_norm, mask=attn_mask)
 
         h = self.norm_mlp(x)
         h = self.mlp_fc1(h)

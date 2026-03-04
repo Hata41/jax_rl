@@ -5,6 +5,7 @@ from flax import nnx
 
 from jax_rl.networks import (
     BinPackPolicyValueModel,
+    TransformerBlock,
     _flatten_binpack_logits,
     init_policy_value_params,
     policy_value_apply,
@@ -153,6 +154,29 @@ def test_binpack_transformer_masking_and_pooling_edge_cases():
     masked_logits = logits[:, 1::7]
     assert jnp.all(masked_logits == jnp.asarray(-1e9, dtype=logits.dtype))
     assert jnp.all(jnp.isfinite(values))
+
+
+def test_transformer_block_masked_tokens_do_not_leak_context():
+    block = TransformerBlock(dim=8, num_heads=2, rngs=nnx.Rngs(jax.random.PRNGKey(2026)))
+
+    q = jnp.asarray([[[0.5, -0.5, 0.3, 0.1, -0.2, 0.7, -0.1, 0.9]]], dtype=jnp.float32)
+    k = jnp.asarray(
+        [[[0.1, 0.2, -0.1, 0.3, 0.2, -0.4, 0.6, -0.5], [0.7, -0.2, 0.4, 0.9, -0.3, 0.1, -0.8, 0.2]]],
+        dtype=jnp.float32,
+    )
+    v_clean = jnp.asarray(
+        [[[0.2, -0.1, 0.4, -0.3, 0.1, 0.0, 0.5, -0.2], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]],
+        dtype=jnp.float32,
+    )
+    v_padded_extreme = v_clean.at[:, 1, :].set(
+        jnp.asarray([1200.0, -900.0, 800.0, -700.0, 600.0, -500.0, 400.0, -300.0], dtype=jnp.float32)
+    )
+
+    mask = jnp.asarray([[[[True, False]]]], dtype=jnp.bool_)
+    out_clean = block(q, k, v_clean, mask=mask)
+    out_padded = block(q, k, v_padded_extreme, mask=mask)
+
+    assert jnp.allclose(out_clean, out_padded, rtol=0.0, atol=1e-5)
 
 
 def test_binpack_actor_index_alignment_item_ems_rotation_order():
