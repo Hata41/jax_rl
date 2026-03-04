@@ -15,10 +15,6 @@ from .types import LogEvent, RunnerState, TrainState
 from .update import make_actor_optimizer, make_critic_optimizer, ppo_update
 
 
-def _hidden_sizes(config: PPOConfig):
-    return tuple([config.hidden_size] * config.hidden_layers)
-
-
 def _unreplicate(tree):
     return jax.tree_util.tree_map(lambda x: x[0], tree)
 
@@ -155,14 +151,9 @@ def train(config: PPOConfig):
 
     initial_params = init_policy_value_params(
         init_net_key,
+        network_config=config.network,
         obs_dim=obs_dim,
         action_dims=action_dims,
-        hidden_sizes=_hidden_sizes(config),
-        model_kind=(
-            "binpack"
-            if (config.env_name.startswith("rustpool:") or config.env_name.startswith("jaxpallet:"))
-            else None
-        ),
         ems_feature_dim=_space_feature_dim(obs_space, "ems_pos", default=6),
         item_feature_dim=_space_feature_dim(obs_space, "item_dims", default=3),
     )

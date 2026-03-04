@@ -26,9 +26,9 @@ def test_discrete_action_space_export_and_equivalence(tmp_path):
     key = jax.random.PRNGKey(0)
     params = init_policy_value_params(
         key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [32, 32]},
         obs_dim=4,
         action_dims=2,
-        hidden_sizes=(32, 32),
     )
 
     rng = np.random.default_rng(123)
@@ -51,9 +51,9 @@ def test_multidiscrete_action_space_export_and_equivalence(tmp_path):
     key = jax.random.PRNGKey(7)
     params = init_policy_value_params(
         key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [32, 32]},
         obs_dim=4,
         action_dims=(2, 3),
-        hidden_sizes=(32, 32),
     )
 
     rng = np.random.default_rng(999)
@@ -77,12 +77,14 @@ def test_binpack_transformer_export_and_equivalence(tmp_path):
     key = jax.random.PRNGKey(17)
     params = init_policy_value_params(
         key,
+        network_config={
+            "_target_": "jax_rl.networks.BinPackPolicyValueModel",
+            "hidden_dim": 32,
+            "num_heads": 2,
+            "num_layers": 1,
+        },
         obs_dim=1,
         action_dims=40 * 20 * 6,
-        hidden_sizes=(32,),
-        model_kind="binpack",
-        num_heads=2,
-        num_layers=1,
         ems_feature_dim=6,
         item_feature_dim=3,
     )

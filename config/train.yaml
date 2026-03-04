@@ -23,8 +23,11 @@ training:
   minibatch_size: 64
   max_grad_norm: 0.5
 
-  hidden_size: 32
-  hidden_layers: 1
+  network:
+    _target_: jax_rl.networks.BinPackPolicyValueModel
+    hidden_dim: 32
+    num_heads: 2
+    num_layers: 1
 
   log_every: 1
 

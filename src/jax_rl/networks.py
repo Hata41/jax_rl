@@ -1,6 +1,8 @@
-from typing import Any, NamedTuple, Sequence
+import inspect
+from typing import Any, Mapping, NamedTuple, Sequence
 
 import distrax
+import hydra
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -411,36 +413,73 @@ def _distribution_from_logits(logits):
 
 def init_policy_value_params(
     key: Array,
+    network_config: Mapping[str, Any],
     obs_dim: int,
     action_dims: int | Sequence[int],
-    hidden_sizes: Sequence[int],
-    model_kind: str | None = None,
-    num_heads: int = 2,
-    num_layers: int = 1,
     ems_feature_dim: int = 6,
     item_feature_dim: int = 3,
 ) -> PolicyValueParams:
-    is_binpack = model_kind == "binpack"
-    if is_binpack:
-        if not isinstance(action_dims, int):
-            raise ValueError("BinPackPolicyValueModel expects a discrete flattened action_dim.")
-        hidden_dim = int(hidden_sizes[-1]) if len(hidden_sizes) > 0 else max(int(obs_dim), 32)
-        model = BinPackPolicyValueModel(
-            hidden_dim=hidden_dim,
-            action_dim=int(action_dims),
-            num_heads=num_heads,
-            num_layers=num_layers,
-            ems_feature_dim=ems_feature_dim,
-            item_feature_dim=item_feature_dim,
-            rngs=nnx.Rngs(key),
+    if not isinstance(network_config, Mapping):
+        raise ValueError(
+            "Invalid 'network' config: expected a mapping with a '_target_' field, "
+            f"got {type(network_config).__name__}."
         )
-    else:
-        model = PolicyValueModel(
-            obs_dim=obs_dim,
-            action_dims=action_dims,
-            hidden_sizes=hidden_sizes,
-            rngs=nnx.Rngs(key),
+
+    target = network_config.get("_target_")
+    if not isinstance(target, str) or not target.strip():
+        raise ValueError(
+            "Invalid 'network' config: missing or empty '_target_' key. "
+            "Define the model class path in training.network._target_."
         )
+
+    try:
+        model_cls = hydra.utils.get_class(target)
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid 'network._target_' value '{target}': could not resolve import path."
+        ) from exc
+
+    constructor_sig = inspect.signature(model_cls.__init__)
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in constructor_sig.parameters.values()
+    )
+    runtime_values = {
+        "obs_dim": int(obs_dim),
+        "action_dims": action_dims,
+        "action_dim": int(action_dims) if isinstance(action_dims, int) else None,
+        "ems_feature_dim": int(ems_feature_dim),
+        "item_feature_dim": int(item_feature_dim),
+        "rngs": nnx.Rngs(key),
+    }
+    instantiate_kwargs = {
+        name: value
+        for name, value in runtime_values.items()
+        if value is not None
+        and (accepts_kwargs or name in constructor_sig.parameters)
+    }
+    try:
+        model_factory = hydra.utils.instantiate(network_config, _partial_=True, _convert_="all")
+    except Exception as exc:
+        raise ValueError(
+            "Failed to instantiate network from config. "
+            f"target='{target}'."
+        ) from exc
+
+    try:
+        model = model_factory(**instantiate_kwargs)
+    except Exception as exc:
+        raise ValueError(
+            "Failed to construct network instance from instantiated factory. "
+            f"target='{target}', runtime_kwargs={sorted(instantiate_kwargs.keys())}."
+        ) from exc
+
+    if not isinstance(model, nnx.Module):
+        raise ValueError(
+            f"Configured network target '{target}' must instantiate to a flax.nnx.Module, "
+            f"got {type(model).__name__}."
+        )
+
     graphdef, state = nnx.split(model)
     return PolicyValueParams(graphdef=graphdef, state=state)
 

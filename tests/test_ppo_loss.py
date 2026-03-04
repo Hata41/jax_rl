@@ -8,7 +8,12 @@ from jax_rl.types import FlattenBatch
 
 def test_ppo_loss_is_finite():
     key = jax.random.PRNGKey(0)
-    params = init_policy_value_params(key, obs_dim=4, action_dims=2, hidden_sizes=(32, 32))
+    params = init_policy_value_params(
+        key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [32, 32]},
+        obs_dim=4,
+        action_dims=2,
+    )
 
     obs = jax.random.normal(jax.random.PRNGKey(1), (64, 4))
     dist, values = policy_value_apply(params.graphdef, params.state, obs)
@@ -40,7 +45,12 @@ def test_ppo_loss_is_finite():
 
 def test_clip_fraction_in_range():
     key = jax.random.PRNGKey(3)
-    params = init_policy_value_params(key, obs_dim=4, action_dims=2, hidden_sizes=(16, 16))
+    params = init_policy_value_params(
+        key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
+        obs_dim=4,
+        action_dims=2,
+    )
 
     obs = jax.random.normal(jax.random.PRNGKey(4), (32, 4))
     dist, values = policy_value_apply(params.graphdef, params.state, obs)
@@ -72,7 +82,12 @@ def test_clip_fraction_in_range():
 
 def test_ppo_loss_extreme_log_ratio_stays_finite():
     key = jax.random.PRNGKey(11)
-    params = init_policy_value_params(key, obs_dim=4, action_dims=2, hidden_sizes=(16, 16))
+    params = init_policy_value_params(
+        key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
+        obs_dim=4,
+        action_dims=2,
+    )
 
     obs = jax.random.normal(jax.random.PRNGKey(12), (32, 4))
     dist, values = policy_value_apply(params.graphdef, params.state, obs)

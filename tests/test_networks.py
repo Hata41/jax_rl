@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import pytest
 from flax import nnx
 
 from jax_rl.networks import (
@@ -8,6 +9,23 @@ from jax_rl.networks import (
     init_policy_value_params,
     policy_value_apply,
 )
+
+
+class _CustomTargetModule(nnx.Module):
+    last_hidden_dim: int | None = None
+
+    def __init__(self, obs_dim: int, action_dims: int, hidden_dim: int, rngs: nnx.Rngs):
+        type(self).last_hidden_dim = int(hidden_dim)
+        self.proj = nnx.Linear(obs_dim, hidden_dim, rngs=rngs)
+        self.actor = nnx.Linear(hidden_dim, action_dims, rngs=rngs)
+        self.critic = nnx.Linear(hidden_dim, 1, rngs=rngs)
+
+    def __call__(self, obs: jax.Array):
+        h = jnp.tanh(self.proj(obs))
+        return self.actor(h), self.critic(h).squeeze(-1)
+
+
+_CUSTOM_TARGET_PATH = f"{__name__}._CustomTargetModule"
 
 
 def _path_token(entry) -> str:
@@ -40,9 +58,9 @@ def test_multidiscrete_action_space_output_shapes():
     key = jax.random.PRNGKey(0)
     params = init_policy_value_params(
         key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [32, 32]},
         obs_dim=4,
         action_dims=(2, 3),
-        hidden_sizes=(32, 32),
     )
 
     obs = jax.random.normal(jax.random.PRNGKey(1), (8, 4))
@@ -59,9 +77,9 @@ def test_modular_forward_pass_value_shape():
     key = jax.random.PRNGKey(3)
     params = init_policy_value_params(
         key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [64, 64]},
         obs_dim=4,
         action_dims=2,
-        hidden_sizes=(64, 64),
     )
 
     obs = jnp.zeros((16, 4), dtype=jnp.float32)
@@ -74,9 +92,9 @@ def test_orthogonal_head_scales_actor_vs_critic_variance():
     key = jax.random.PRNGKey(7)
     params = init_policy_value_params(
         key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [128, 128]},
         obs_dim=8,
         action_dims=4,
-        hidden_sizes=(128, 128),
     )
 
     actor_w = _find_first_kernel(params.state, module_prefix="actor_head")
@@ -172,3 +190,43 @@ def test_binpack_actor_rotational_consistency_before_masking():
     first_rot = logits_4d[..., :1]
     tiled_first = jnp.tile(first_rot, (1, 1, 1, num_rotations))
     assert jnp.allclose(logits_4d, tiled_first)
+
+
+def test_network_target_instantiation_custom_module_state_structure():
+    params = init_policy_value_params(
+        jax.random.PRNGKey(99),
+        network_config={
+            "_target_": _CUSTOM_TARGET_PATH,
+            "hidden_dim": 48,
+        },
+        obs_dim=4,
+        action_dims=3,
+    )
+
+    proj_kernel = _find_first_kernel(params.state, module_prefix="proj")
+    assert proj_kernel.shape == (4, 48)
+
+
+def test_network_parameter_injection_hidden_dim_reaches_constructor():
+    _CustomTargetModule.last_hidden_dim = None
+    init_policy_value_params(
+        jax.random.PRNGKey(100),
+        network_config={
+            "_target_": _CUSTOM_TARGET_PATH,
+            "hidden_dim": 128,
+        },
+        obs_dim=6,
+        action_dims=2,
+    )
+
+    assert _CustomTargetModule.last_hidden_dim == 128
+
+
+def test_missing_network_target_raises_value_error():
+    with pytest.raises(ValueError, match="_target_"):
+        init_policy_value_params(
+            jax.random.PRNGKey(101),
+            network_config={"hidden_sizes": [16, 16]},
+            obs_dim=4,
+            action_dims=2,
+        )

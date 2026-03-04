@@ -76,9 +76,9 @@ class _MockBatchedEnv:
 def test_batched_rollout_no_vmap():
     params = init_policy_value_params(
         key=jax.random.PRNGKey(0),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16]},
         obs_dim=3,
         action_dims=2,
-        hidden_sizes=(16,),
     )
     env = _MockBatchedEnv()
     env_state = jnp.zeros((4, 3), dtype=jnp.float32)
@@ -101,9 +101,9 @@ def test_batched_rollout_no_vmap():
 def test_policy_action_masking():
     params = init_policy_value_params(
         key=jax.random.PRNGKey(2),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16]},
         obs_dim=3,
         action_dims=4,
-        hidden_sizes=(16,),
     )
 
     obs = {
@@ -132,8 +132,12 @@ def test_train_pipeline_dry_run():
         num_steps=2,
         update_epochs=1,
         minibatch_size=2,
-        hidden_size=16,
-        hidden_layers=1,
+        network={
+            "_target_": "jax_rl.networks.BinPackPolicyValueModel",
+            "hidden_dim": 16,
+            "num_heads": 2,
+            "num_layers": 1,
+        },
         eval_episodes=0,
         log_every=1,
         save_interval_steps=0,

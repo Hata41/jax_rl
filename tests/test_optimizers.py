@@ -17,9 +17,9 @@ def test_actor_and_critic_optimizers_are_separate():
     config = PPOConfig(actor_lr=1.0, critic_lr=0.0)
     params = init_policy_value_params(
         jax.random.PRNGKey(0),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
         obs_dim=4,
         action_dims=2,
-        hidden_sizes=(16, 16),
     )
 
     actor_optimizer = make_actor_optimizer(config)
@@ -69,9 +69,9 @@ def test_actor_learning_rate_schedule_reaches_zero_at_total_opt_steps():
     optimizer = make_actor_optimizer(config)
     params = init_policy_value_params(
         jax.random.PRNGKey(123),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
         obs_dim=4,
         action_dims=2,
-        hidden_sizes=(16, 16),
     ).state
     opt_state = optimizer.init(params)
 

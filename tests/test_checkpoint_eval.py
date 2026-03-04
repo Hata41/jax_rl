@@ -14,7 +14,12 @@ from jax_rl.update import make_actor_optimizer, make_critic_optimizer
 def test_checkpoint_roundtrip(tmp_path: Path):
     config = PPOConfig()
     key = jax.random.PRNGKey(0)
-    params = init_policy_value_params(key, obs_dim=4, action_dims=2, hidden_sizes=(32, 32))
+    params = init_policy_value_params(
+        key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [32, 32]},
+        obs_dim=4,
+        action_dims=2,
+    )
     actor_optimizer = make_actor_optimizer(config)
     critic_optimizer = make_critic_optimizer(config)
     state = TrainState(
@@ -53,7 +58,12 @@ def test_checkpoint_roundtrip(tmp_path: Path):
 def test_max_to_keep(tmp_path: Path):
     config = PPOConfig()
     key = jax.random.PRNGKey(7)
-    params = init_policy_value_params(key, obs_dim=4, action_dims=2, hidden_sizes=(16, 16))
+    params = init_policy_value_params(
+        key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
+        obs_dim=4,
+        action_dims=2,
+    )
     actor_optimizer = make_actor_optimizer(config)
     critic_optimizer = make_critic_optimizer(config)
     state = TrainState(
@@ -84,9 +94,9 @@ def test_evaluate_returns_expected_keys():
     config = PPOConfig(seed=1)
     params = init_policy_value_params(
         jax.random.PRNGKey(1),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
         obs_dim=4,
         action_dims=2,
-        hidden_sizes=(16, 16),
     )
     metrics = evaluate(params, config, num_episodes=2, max_steps_per_episode=16)
 

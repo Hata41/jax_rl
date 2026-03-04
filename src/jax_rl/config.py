@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 import jax
 
@@ -28,6 +28,12 @@ class PPOConfig:
 
     hidden_size: int = 64
     hidden_layers: int = 2
+    network: dict[str, Any] = field(
+        default_factory=lambda: {
+            "_target_": "jax_rl.networks.PolicyValueModel",
+            "hidden_sizes": [64, 64],
+        }
+    )
 
     log_every: int = 10
     eval_every: int = 10
