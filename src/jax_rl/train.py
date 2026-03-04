@@ -102,6 +102,13 @@ def _space_flat_dim(space) -> int:
             )
         )
 
+    if isinstance(space, tuple) and len(space) >= 1:
+        shape = space[0]
+        if isinstance(shape, (tuple, list)):
+            return int(np.prod(shape))
+    if isinstance(space, list):
+        return int(np.prod(space))
+
     if hasattr(space, "generate_value"):
         sample_obs = space.generate_value()
         flat_obs, _ = flatten_observation_features(sample_obs, batch_ndim=0)
@@ -136,7 +143,11 @@ def train(config: PPOConfig):
     obs_dim = _space_flat_dim(env.observation_space(env_params))
 
     action_space = env.action_space(env_params)
-    if hasattr(action_space, "num_values"):
+    if isinstance(action_space, tuple) and len(action_space) == 1:
+        action_dims = int(action_space[0])
+    elif isinstance(action_space, list) and len(action_space) == 1:
+        action_dims = int(action_space[0])
+    elif hasattr(action_space, "num_values"):
         num_values = np.asarray(action_space.num_values)
         if num_values.ndim == 0:
             action_dims = int(num_values)
