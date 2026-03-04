@@ -1,0 +1,3 @@
+from jax_rl.runtime import configure_jax_runtime_defaults
+
+configure_jax_runtime_defaults()

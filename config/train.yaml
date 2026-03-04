@@ -3,12 +3,12 @@ training:
   # - rustpool: rustpool:<task_id>        (example: rustpool:BinPack-v0)
   # - jaxpallet: jaxpallet:<preset>       (example: jaxpallet:PMC-PLD)
   # - gymnax fallback: plain env id       (example: CartPole-v1)
-  env_name: rustpool:BinPack-v0
+  env_name: CartPole-v1
   seed: 0
-  total_timesteps: 10000000
+  total_timesteps: 2048
 
-  num_envs: 64
-  num_steps: 64
+  num_envs: 8
+  num_steps: 32
 
   actor_lr: 0.0003
   critic_lr: 0.0003
@@ -20,13 +20,13 @@ training:
   entropy_coef: 0.01
 
   update_epochs: 1
-  minibatch_size: 256
+  minibatch_size: 64
   max_grad_norm: 0.5
 
-  hidden_size: 64
-  hidden_layers: 2
+  hidden_size: 32
+  hidden_layers: 1
 
-  log_every: 10
+  log_every: 1
 
   checkpoint_dir: checkpoints
   save_interval_steps: 0
@@ -34,8 +34,8 @@ training:
   keep_period:
   resume_from:
 
-  tensorboard_logdir: runs_tb
-  tensorboard_run_name: default
+  tensorboard_logdir:
+  tensorboard_run_name: minimal
 
-  eval_every: 10
+  eval_every: 1
   eval_episodes: 0

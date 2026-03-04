@@ -3,8 +3,12 @@ from dataclasses import fields
 
 import yaml
 
-from .eval import evaluate
 from .config import PPOConfig
+from .runtime import configure_jax_runtime_defaults
+
+configure_jax_runtime_defaults()
+
+from .eval import evaluate
 from .train import train
 
 

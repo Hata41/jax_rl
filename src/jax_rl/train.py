@@ -3,16 +3,15 @@ import jax.numpy as jnp
 import numpy as np
 import time
 from dataclasses import asdict
-from pathlib import Path
 
 from .checkpoint import Checkpointer
 from .config import PPOConfig
 from .env import make_stoa_env
 from .eval import evaluate
-from .logging import create_tensorboard_writer, log_scalar_metrics
+from .logging import extract_completed_episode_metrics, jaxRL_Logger
 from .networks import flatten_observation_features, init_policy_value_params
 from .rollout import collect_rollout
-from .types import RunnerState, TrainState
+from .types import LogEvent, RunnerState, TrainState
 from .update import make_actor_optimizer, make_critic_optimizer, ppo_update
 
 
@@ -35,33 +34,6 @@ def _safe_steps_per_second(work_units: float, elapsed_seconds: float) -> float:
     if elapsed_seconds <= 0.0:
         return float("nan")
     return float(work_units / elapsed_seconds)
-
-
-def _prefix_metrics(prefix: str, metrics: dict) -> dict[str, float]:
-    return {f"{prefix}/{key}": float(np.asarray(value)) for key, value in metrics.items()}
-
-
-def _extract_completed_episode_metrics(rollout_infos: dict) -> dict[str, float]:
-    returns = np.asarray(
-        rollout_infos.get("returned_episode_returns", rollout_infos.get("episode_return")),
-        dtype=np.float32,
-    )
-    lengths = np.asarray(
-        rollout_infos.get("returned_episode_lengths", rollout_infos.get("episode_length")),
-        dtype=np.float32,
-    )
-    completed = np.asarray(
-        rollout_infos.get("returned_episode", rollout_infos.get("is_terminal_step")),
-        dtype=bool,
-    )
-    completed_returns = returns[completed]
-    if completed_returns.size == 0:
-        return {}
-    completed_lengths = lengths[completed]
-    return {
-        "act/episode_return": float(completed_returns.mean()),
-        "act/episode_length": float(completed_lengths.mean()),
-    }
 
 
 def _extract_learning_rate(actor_opt_state) -> float:
@@ -117,6 +89,21 @@ def _space_flat_dim(space) -> int:
     raise ValueError(f"Unsupported observation space for flat dim inference: {type(space)}")
 
 
+def _space_feature_dim(obs_space, key: str, default: int) -> int:
+    spaces = getattr(obs_space, "spaces", None)
+    if isinstance(spaces, dict) and key in spaces:
+        leaf = spaces[key]
+        shape = getattr(leaf, "shape", None)
+        if shape is not None:
+            return int(shape[-1])
+
+    if isinstance(obs_space, dict) and key in obs_space:
+        leaf = obs_space[key]
+        if isinstance(leaf, tuple) and len(leaf) >= 1 and isinstance(leaf[0], (tuple, list)):
+            return int(leaf[0][-1])
+    return int(default)
+
+
 def train(config: PPOConfig):
     if config.rollout_batch_size % config.minibatch_size != 0:
         raise ValueError(
@@ -140,7 +127,8 @@ def train(config: PPOConfig):
     num_envs_per_device = config.num_envs // num_devices
 
     env, env_params = make_stoa_env(config.env_name, num_envs_per_device=num_envs_per_device)
-    obs_dim = _space_flat_dim(env.observation_space(env_params))
+    obs_space = env.observation_space(env_params)
+    obs_dim = _space_flat_dim(obs_space)
 
     action_space = env.action_space(env_params)
     if isinstance(action_space, tuple) and len(action_space) == 1:
@@ -170,6 +158,13 @@ def train(config: PPOConfig):
         obs_dim=obs_dim,
         action_dims=action_dims,
         hidden_sizes=_hidden_sizes(config),
+        model_kind=(
+            "binpack"
+            if (config.env_name.startswith("rustpool:") or config.env_name.startswith("jaxpallet:"))
+            else None
+        ),
+        ems_feature_dim=_space_feature_dim(obs_space, "ems_pos", default=6),
+        item_feature_dim=_space_feature_dim(obs_space, "item_dims", default=3),
     )
     initial_train_state = TrainState(
         params=initial_params,
@@ -268,17 +263,17 @@ def train(config: PPOConfig):
     latest_checkpoint = None
     remaining_updates = config.num_updates - start_update
     num_minibatches = config.rollout_batch_size // config.minibatch_size
-    writer = create_tensorboard_writer(config.tensorboard_logdir, config.tensorboard_run_name)
+    logger = jaxRL_Logger.from_config(config)
+    logger.log_config(config)
     tensorboard_run_dir = (
-        str(Path(config.tensorboard_logdir) / config.tensorboard_run_name)
+        str(config.tensorboard_logdir + "/" + config.tensorboard_run_name)
         if config.tensorboard_logdir
         else None
     )
 
     if remaining_updates < 1:
-        if writer is not None:
-            writer.flush()
-            writer.close()
+        logger.flush()
+        logger.close()
         return {
             "num_updates": config.num_updates,
             "start_update": start_update,
@@ -300,12 +295,12 @@ def train(config: PPOConfig):
         rollout_metrics = _unreplicate(rollout_metrics)
         rollout_infos = _unreplicate(rollout_infos)
 
-        act_metrics = _prefix_metrics("act", rollout_metrics)
-        act_metrics["act/steps_per_second"] = _safe_steps_per_second(
+        act_metrics = dict(rollout_metrics)
+        act_metrics["steps_per_second"] = _safe_steps_per_second(
             num_devices * num_envs_per_device * config.num_steps,
             rollout_elapsed,
         )
-        act_metrics.update(_extract_completed_episode_metrics(rollout_infos))
+        act_metrics.update(extract_completed_episode_metrics(rollout_infos))
 
         update_start = time.time()
         runner_state, train_metrics = pmap_update(runner_state, rollout_batch, last_values)
@@ -313,16 +308,16 @@ def train(config: PPOConfig):
         update_elapsed = time.time() - update_start
         train_metrics = _unreplicate(train_metrics)
 
-        train_metrics = _prefix_metrics("train", train_metrics)
-        train_metrics["train/steps_per_second"] = _safe_steps_per_second(
+        train_metrics = dict(train_metrics)
+        train_metrics["steps_per_second"] = _safe_steps_per_second(
             config.update_epochs * num_minibatches,
             update_elapsed,
         )
         actor_opt_state = _unreplicate(runner_state.train_state.actor_opt_state)
-        train_metrics["train/learning_rate"] = _extract_learning_rate(actor_opt_state)
+        train_metrics["learning_rate"] = _extract_learning_rate(actor_opt_state)
 
         log_step = (global_update_idx + 1) * config.rollout_batch_size
-        misc_metrics = {"misc/timestep": float(log_step)}
+        misc_metrics = {"timestep": float(log_step)}
 
         eval_metrics = {}
         if (
@@ -337,39 +332,32 @@ def train(config: PPOConfig):
                 num_episodes=config.eval_episodes,
             )
             eval_elapsed = time.time() - eval_start
-            eval_metrics = _prefix_metrics("eval", eval_results)
-            eval_metrics["eval/steps_per_second"] = _safe_steps_per_second(
+            eval_metrics = dict(eval_results)
+            eval_metrics["steps_per_second"] = _safe_steps_per_second(
                 float(eval_results.get("steps", 0)),
                 eval_elapsed,
             )
 
-        merged_metrics = {
-            **act_metrics,
-            **train_metrics,
-            **misc_metrics,
-            **eval_metrics,
-        }
+        logger.log(act_metrics, log_step, LogEvent.ACT)
+        logger.log(train_metrics, log_step, LogEvent.TRAIN)
+        logger.log(misc_metrics, log_step, LogEvent.ABSOLUTE)
+        if eval_metrics:
+            logger.log(eval_metrics, log_step, LogEvent.EVAL)
+
+        merged_metrics = {}
+        merged_metrics.update(logger.materialize(act_metrics, LogEvent.ACT))
+        merged_metrics.update(logger.materialize(train_metrics, LogEvent.TRAIN))
+        merged_metrics.update(logger.materialize(misc_metrics, LogEvent.ABSOLUTE))
+        if eval_metrics:
+            merged_metrics.update(logger.materialize(eval_metrics, LogEvent.EVAL))
         latest_metrics = merged_metrics
-        log_scalar_metrics(
-            writer,
-            merged_metrics,
-            log_step,
-        )
-        if (
-            global_update_idx % config.log_every == 0
-            or local_update_idx == remaining_updates - 1
-        ):
-            metrics_str = " ".join(
-                f"{k}={float(v):.4f}" for k, v in sorted(merged_metrics.items())
-            )
-            print(f"update={global_update_idx + 1}/{config.num_updates} {metrics_str}")
         if config.save_interval_steps > 0 and (
             (global_update_idx + 1) % config.save_interval_steps == 0
             or local_update_idx == remaining_updates - 1
         ):
             train_state_to_save = _unreplicate(runner_state.train_state)
             key_to_save = _unreplicate(runner_state.key)
-            eval_metric = float(eval_metrics.get("eval/return_mean", float("-inf")))
+            eval_metric = float(eval_metrics.get("return_mean", float("-inf")))
             checkpointer.save(
                 timestep=global_update_idx + 1,
                 train_state=train_state_to_save,
@@ -378,9 +366,8 @@ def train(config: PPOConfig):
             )
             latest_checkpoint = checkpointer.checkpoint_path_for_step(global_update_idx + 1)
 
-    if writer is not None:
-        writer.flush()
-        writer.close()
+    logger.flush()
+    logger.close()
 
     return {
         "num_updates": config.num_updates,

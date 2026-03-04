@@ -34,17 +34,36 @@ class BatchedRecordEpisodeMetrics(RecordEpisodeMetrics):
 
 
 class RustpoolObsWrapper(Wrapper):
+    @staticmethod
+    def _normalize_observation(observation, action_mask):
+        if not isinstance(observation, dict):
+            observation = {"obs": observation}
+
+        canonical = dict(observation)
+        if "ems_pos" not in canonical and "ems" in canonical:
+            canonical["ems_pos"] = canonical["ems"]
+        if "item_dims" not in canonical and "items" in canonical:
+            canonical["item_dims"] = canonical["items"]
+        if "item_mask" not in canonical and "items_mask" in canonical:
+            canonical["item_mask"] = canonical["items_mask"]
+
+        if action_mask is not None:
+            canonical["action_mask"] = action_mask
+        return canonical
+
     def _normalize_timestep(self, timestep):
         extras = timestep.extras or {}
         action_mask = extras.get("action_mask") if hasattr(extras, "get") else None
-        if action_mask is None:
-            return timestep
+        new_observation = self._normalize_observation(timestep.observation, action_mask)
 
-        observation = timestep.observation
-        if not isinstance(observation, dict):
-            observation = {"obs": observation}
-        new_observation = {**observation, "action_mask": action_mask}
-        return timestep.replace(observation=new_observation)
+        new_extras = extras
+        if hasattr(extras, "get"):
+            next_obs = extras.get("next_obs")
+            if next_obs is not None:
+                normalized_next_obs = self._normalize_observation(next_obs, action_mask)
+                new_extras = {**extras, "next_obs": normalized_next_obs}
+
+        return timestep.replace(observation=new_observation, extras=new_extras)
 
     def reset(self, rng_key, env_params=None):
         state, timestep = self._env.reset(rng_key, env_params)

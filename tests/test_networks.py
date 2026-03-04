@@ -1,7 +1,13 @@
 import jax
 import jax.numpy as jnp
+from flax import nnx
 
-from jax_rl.networks import init_policy_value_params, policy_value_apply
+from jax_rl.networks import (
+    BinPackPolicyValueModel,
+    _flatten_binpack_logits,
+    init_policy_value_params,
+    policy_value_apply,
+)
 
 
 def _path_token(entry) -> str:
@@ -80,3 +86,89 @@ def test_orthogonal_head_scales_actor_vs_critic_variance():
     critic_var = jnp.var(critic_w)
 
     assert critic_var > actor_var * 100.0
+
+
+def _dummy_binpack_obs(batch_size: int = 2, max_ems: int = 40, max_items: int = 20, rotations: int = 6):
+    max_actions = max_ems * max_items * rotations
+    return {
+        "ems_pos": jnp.ones((batch_size, max_ems, 6), dtype=jnp.float32),
+        "item_dims": jnp.ones((batch_size, max_items, 3), dtype=jnp.float32),
+        "ems_mask": jnp.ones((batch_size, max_ems), dtype=jnp.bool_),
+        "item_mask": jnp.ones((batch_size, max_items), dtype=jnp.bool_),
+        "action_mask": jnp.ones((batch_size, max_actions), dtype=jnp.bool_),
+    }
+
+
+def test_binpack_transformer_forward_shapes():
+    model = BinPackPolicyValueModel(
+        hidden_dim=32,
+        action_dim=40 * 20 * 6,
+        num_heads=2,
+        num_layers=1,
+        ems_feature_dim=6,
+        item_feature_dim=3,
+        rngs=nnx.Rngs(jax.random.PRNGKey(123)),
+    )
+    obs = _dummy_binpack_obs(batch_size=2)
+    logits, values = model(obs)
+
+    assert logits.shape == (2, 40 * 20 * 6)
+    assert values.shape == (2,)
+
+
+def test_binpack_transformer_masking_and_pooling_edge_cases():
+    model = BinPackPolicyValueModel(
+        hidden_dim=32,
+        action_dim=40 * 20 * 6,
+        num_heads=2,
+        num_layers=1,
+        ems_feature_dim=6,
+        item_feature_dim=3,
+        rngs=nnx.Rngs(jax.random.PRNGKey(321)),
+    )
+    obs = _dummy_binpack_obs(batch_size=2)
+    obs["action_mask"] = obs["action_mask"].at[:, 1::7].set(False)
+    obs["ems_mask"] = jnp.zeros_like(obs["ems_mask"], dtype=jnp.bool_)
+
+    logits, values = model(obs)
+
+    masked_logits = logits[:, 1::7]
+    assert jnp.all(masked_logits == jnp.asarray(-1e9, dtype=logits.dtype))
+    assert jnp.all(jnp.isfinite(values))
+
+
+def test_binpack_actor_index_alignment_item_ems_rotation_order():
+    batch_size = 1
+    num_ems = 2
+    num_items = 2
+    num_rotations = 6
+
+    score_grid = jnp.zeros((batch_size, num_ems, num_items), dtype=jnp.float32)
+    score_grid = score_grid.at[0, 0, 1].set(10.0)
+    action_mask = jnp.ones((batch_size, num_items * num_ems * num_rotations), dtype=jnp.bool_)
+
+    logits = _flatten_binpack_logits(score_grid, action_mask)
+    argmax_idx = int(jnp.argmax(logits[0]))
+
+    expected_idx = (1 * num_ems * num_rotations) + (0 * num_rotations) + 0
+    assert argmax_idx == expected_idx
+
+
+def test_binpack_actor_rotational_consistency_before_masking():
+    batch_size = 1
+    num_ems = 3
+    num_items = 2
+    num_rotations = 6
+
+    score_grid = jnp.asarray(
+        [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]],
+        dtype=jnp.float32,
+    )
+    action_mask = jnp.ones((batch_size, num_items * num_ems * num_rotations), dtype=jnp.bool_)
+
+    logits = _flatten_binpack_logits(score_grid, action_mask)
+    logits_4d = logits.reshape((batch_size, num_items, num_ems, num_rotations))
+
+    first_rot = logits_4d[..., :1]
+    tiled_first = jnp.tile(first_rot, (1, 1, 1, num_rotations))
+    assert jnp.allclose(logits_4d, tiled_first)

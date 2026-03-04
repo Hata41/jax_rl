@@ -38,6 +38,26 @@ def test_make_stoa_env_routing():
     assert isinstance(jp_env, VmapWrapper)
 
 
+def test_rustpool_obs_keys_are_canonicalized():
+    pytest.importorskip("rustpool")
+
+    env, env_params = make_stoa_env("rustpool:BinPack-v0", num_envs_per_device=1)
+    _, timestep = env.reset(jax.random.PRNGKey(0), env_params)
+    obs = timestep.observation
+
+    assert isinstance(obs, dict)
+    assert "action_mask" in obs
+    assert "ems_pos" in obs
+    assert "item_dims" in obs
+    assert "item_mask" in obs
+
+    assert "next_obs" in timestep.extras
+    next_obs = timestep.extras["next_obs"]
+    assert "ems_pos" in next_obs
+    assert "item_dims" in next_obs
+    assert "item_mask" in next_obs
+
+
 class _MockBatchedEnv:
     def step(self, state, actions, env_params):
         del env_params

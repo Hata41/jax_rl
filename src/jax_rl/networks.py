@@ -162,6 +162,210 @@ class ActorHead(nnx.Module):
         return tuple(branch(features) for branch in self.branches)
 
 
+class ONNXSafeAttention(nnx.Module):
+    def __init__(self, dim: int, num_heads: int, rngs: nnx.Rngs):
+        if dim % num_heads != 0:
+            raise ValueError(f"dim ({dim}) must be divisible by num_heads ({num_heads}).")
+        self.dim = int(dim)
+        self.num_heads = int(num_heads)
+        self.head_dim = int(dim // num_heads)
+        self.q_proj = _linear(dim, dim, scale=1.0, rngs=rngs)
+        self.k_proj = _linear(dim, dim, scale=1.0, rngs=rngs)
+        self.v_proj = _linear(dim, dim, scale=1.0, rngs=rngs)
+        self.out_proj = _linear(dim, dim, scale=1.0, rngs=rngs)
+
+    def __call__(self, q: Array, k: Array, v: Array, mask: Array | None = None) -> Array:
+        batch_size, q_len, _ = q.shape
+        k_len = k.shape[1]
+
+        q_proj = self.q_proj(q)
+        k_proj = self.k_proj(k)
+        v_proj = self.v_proj(v)
+
+        q_heads = q_proj.reshape((batch_size, q_len, self.num_heads, self.head_dim))
+        k_heads = k_proj.reshape((batch_size, k_len, self.num_heads, self.head_dim))
+        v_heads = v_proj.reshape((batch_size, k_len, self.num_heads, self.head_dim))
+
+        q_heads = jnp.transpose(q_heads, (0, 2, 1, 3))
+        k_heads = jnp.transpose(k_heads, (0, 2, 1, 3))
+        v_heads = jnp.transpose(v_heads, (0, 2, 1, 3))
+
+        k_t = jnp.transpose(k_heads, (0, 1, 3, 2))
+        scale = jnp.asarray(self.head_dim, dtype=jnp.float32) ** -0.5
+        scores = jnp.matmul(q_heads, k_t) * scale
+
+        if mask is None:
+            mask = jnp.ones((batch_size, 1, q_len, k_len), dtype=jnp.bool_)
+        else:
+            mask = jnp.asarray(mask, dtype=jnp.bool_)
+
+        masked_scores = jnp.where(mask, scores, jnp.asarray(-1e9, dtype=scores.dtype))
+        weights = jax.nn.softmax(masked_scores, axis=-1)
+        attended = jnp.matmul(weights, v_heads)
+
+        attended = jnp.transpose(attended, (0, 2, 1, 3))
+        attended = attended.reshape((batch_size, q_len, self.dim))
+        return self.out_proj(attended)
+
+
+class TransformerBlock(nnx.Module):
+    def __init__(self, dim: int, num_heads: int, rngs: nnx.Rngs):
+        self.norm_attn = nnx.LayerNorm(num_features=dim, rngs=rngs)
+        self.attn = ONNXSafeAttention(dim=dim, num_heads=num_heads, rngs=rngs)
+        self.norm_mlp = nnx.LayerNorm(num_features=dim, rngs=rngs)
+        self.mlp_fc1 = _linear(dim, dim * 4, scale=jnp.sqrt(2.0), rngs=rngs)
+        self.mlp_fc2 = _linear(dim * 4, dim, scale=1.0, rngs=rngs)
+
+    def __call__(self, q: Array, k: Array, v: Array, mask: Array | None = None) -> Array:
+        q_norm = self.norm_attn(q)
+        k_norm = self.norm_attn(k)
+        v_norm = self.norm_attn(v)
+        x = q + self.attn(q_norm, k_norm, v_norm, mask=mask)
+
+        h = self.norm_mlp(x)
+        h = self.mlp_fc1(h)
+        h = jax.nn.relu(h)
+        h = self.mlp_fc2(h)
+        return x + h
+
+
+def _pair_mask(query_mask: Array, key_mask: Array) -> Array:
+    q = jnp.expand_dims(jnp.expand_dims(jnp.asarray(query_mask, dtype=jnp.bool_), axis=1), axis=-1)
+    k = jnp.expand_dims(jnp.expand_dims(jnp.asarray(key_mask, dtype=jnp.bool_), axis=1), axis=2)
+    return jnp.logical_and(q, k)
+
+
+def _masked_mean(x: Array, mask: Array) -> Array:
+    mask_f = jnp.asarray(mask, dtype=jnp.float32)
+    mask_exp = jnp.expand_dims(mask_f, axis=-1)
+    numerator = jnp.sum(x * mask_exp, axis=1)
+    denominator = jnp.sum(mask_f, axis=1, keepdims=True) + jnp.asarray(1e-6, dtype=jnp.float32)
+    return numerator / denominator
+
+
+def _flatten_binpack_logits(score_grid: Array, action_mask: Array) -> Array:
+    score_grid = jnp.transpose(score_grid, (0, 2, 1))
+    score_grid = jnp.expand_dims(score_grid, axis=-1)
+
+    num_items = int(score_grid.shape[1])
+    num_ems = int(score_grid.shape[2])
+    num_actions = int(action_mask.shape[-1])
+    denom = max(num_items * num_ems, 1)
+    num_rotations = max(num_actions // denom, 1)
+
+    tiled = jnp.tile(score_grid, (1, 1, 1, num_rotations))
+    return tiled.reshape((tiled.shape[0], -1))
+
+
+class BinPackTorso(nnx.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        num_layers: int,
+        ems_feature_dim: int,
+        item_feature_dim: int,
+        rngs: nnx.Rngs,
+    ):
+        self.hidden_dim = int(hidden_dim)
+        self.num_layers = int(num_layers)
+        self.ems_embed = _linear(int(ems_feature_dim), self.hidden_dim, scale=jnp.sqrt(2.0), rngs=rngs)
+        self.item_embed = _linear(int(item_feature_dim), self.hidden_dim, scale=jnp.sqrt(2.0), rngs=rngs)
+        self.ems_self_blocks = nnx.List(
+            [TransformerBlock(dim=hidden_dim, num_heads=num_heads, rngs=rngs) for _ in range(num_layers)]
+        )
+        self.item_self_blocks = nnx.List(
+            [TransformerBlock(dim=hidden_dim, num_heads=num_heads, rngs=rngs) for _ in range(num_layers)]
+        )
+        self.ems_cross_blocks = nnx.List(
+            [TransformerBlock(dim=hidden_dim, num_heads=num_heads, rngs=rngs) for _ in range(num_layers)]
+        )
+        self.item_cross_blocks = nnx.List(
+            [TransformerBlock(dim=hidden_dim, num_heads=num_heads, rngs=rngs) for _ in range(num_layers)]
+        )
+
+    def __call__(self, obs: dict) -> tuple[Array, Array, Array, Array]:
+        ems_pos = jnp.asarray(obs["ems_pos"], dtype=jnp.float32)
+        item_dims = jnp.asarray(obs["item_dims"], dtype=jnp.float32)
+        ems_mask = jnp.asarray(obs["ems_mask"], dtype=jnp.bool_)
+        item_mask = jnp.asarray(obs["item_mask"], dtype=jnp.bool_)
+
+        ems_embeddings = self.ems_embed(ems_pos)
+        item_embeddings = self.item_embed(item_dims)
+
+        ems_self_mask = _pair_mask(ems_mask, ems_mask)
+        items_self_mask = _pair_mask(item_mask, item_mask)
+        ems_cross_mask = _pair_mask(ems_mask, item_mask)
+        items_cross_mask = _pair_mask(item_mask, ems_mask)
+
+        for layer_idx in range(self.num_layers):
+            ems_embeddings = self.ems_self_blocks[layer_idx](
+                ems_embeddings,
+                ems_embeddings,
+                ems_embeddings,
+                ems_self_mask,
+            )
+            item_embeddings = self.item_self_blocks[layer_idx](
+                item_embeddings,
+                item_embeddings,
+                item_embeddings,
+                items_self_mask,
+            )
+            ems_embeddings = self.ems_cross_blocks[layer_idx](
+                ems_embeddings,
+                item_embeddings,
+                item_embeddings,
+                ems_cross_mask,
+            )
+            item_embeddings = self.item_cross_blocks[layer_idx](
+                item_embeddings,
+                ems_embeddings,
+                ems_embeddings,
+                items_cross_mask,
+            )
+
+        return ems_embeddings, item_embeddings, ems_mask, item_mask
+
+
+class BinPackPolicyValueModel(nnx.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        action_dim: int,
+        num_heads: int,
+        num_layers: int,
+        ems_feature_dim: int,
+        item_feature_dim: int,
+        rngs: nnx.Rngs,
+    ):
+        self.action_dim = int(action_dim)
+        self.torso = BinPackTorso(
+            hidden_dim=hidden_dim,
+            num_heads=num_heads,
+            num_layers=num_layers,
+            ems_feature_dim=ems_feature_dim,
+            item_feature_dim=item_feature_dim,
+            rngs=rngs,
+        )
+        self.item_actor_proj = _linear(hidden_dim, hidden_dim, scale=0.01, rngs=rngs)
+        self.critic_head = _linear(hidden_dim * 2, 1, scale=1.0, rngs=rngs)
+
+    def __call__(self, obs: dict):
+        ems_embeddings, item_embeddings, ems_mask, item_mask = self.torso(obs)
+
+        items_projected = self.item_actor_proj(item_embeddings)
+        score_grid = jnp.matmul(ems_embeddings, jnp.transpose(items_projected, (0, 2, 1)))
+        action_mask = jnp.asarray(obs["action_mask"], dtype=jnp.bool_)
+        logits = _flatten_binpack_logits(score_grid, action_mask)
+        logits = jnp.where(action_mask, logits, jnp.asarray(-1e9, dtype=logits.dtype))
+
+        pooled_ems = _masked_mean(ems_embeddings, ems_mask)
+        pooled_items = _masked_mean(item_embeddings, item_mask)
+        critic_features = jnp.concatenate([pooled_ems, pooled_items], axis=-1)
+        values = self.critic_head(critic_features).squeeze(-1)
+        return logits, values
+
+
 class PolicyValueModel(nnx.Module):
     def __init__(
         self,
@@ -210,13 +414,33 @@ def init_policy_value_params(
     obs_dim: int,
     action_dims: int | Sequence[int],
     hidden_sizes: Sequence[int],
+    model_kind: str | None = None,
+    num_heads: int = 2,
+    num_layers: int = 1,
+    ems_feature_dim: int = 6,
+    item_feature_dim: int = 3,
 ) -> PolicyValueParams:
-    model = PolicyValueModel(
-        obs_dim=obs_dim,
-        action_dims=action_dims,
-        hidden_sizes=hidden_sizes,
-        rngs=nnx.Rngs(key),
-    )
+    is_binpack = model_kind == "binpack"
+    if is_binpack:
+        if not isinstance(action_dims, int):
+            raise ValueError("BinPackPolicyValueModel expects a discrete flattened action_dim.")
+        hidden_dim = int(hidden_sizes[-1]) if len(hidden_sizes) > 0 else max(int(obs_dim), 32)
+        model = BinPackPolicyValueModel(
+            hidden_dim=hidden_dim,
+            action_dim=int(action_dims),
+            num_heads=num_heads,
+            num_layers=num_layers,
+            ems_feature_dim=ems_feature_dim,
+            item_feature_dim=item_feature_dim,
+            rngs=nnx.Rngs(key),
+        )
+    else:
+        model = PolicyValueModel(
+            obs_dim=obs_dim,
+            action_dims=action_dims,
+            hidden_sizes=hidden_sizes,
+            rngs=nnx.Rngs(key),
+        )
     graphdef, state = nnx.split(model)
     return PolicyValueParams(graphdef=graphdef, state=state)
 

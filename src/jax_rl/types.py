@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Any, NamedTuple
 
 import jax
@@ -5,6 +6,14 @@ from flax import nnx
 
 Array = jax.Array
 Params = Any
+
+
+class LogEvent(Enum):
+    ACT = "act"
+    TRAIN = "train"
+    EVAL = "eval"
+    ABSOLUTE = "absolute"
+    MISC = "misc"
 
 
 class PolicyValueParams(NamedTuple):
