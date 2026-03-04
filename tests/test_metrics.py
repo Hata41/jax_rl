@@ -3,8 +3,8 @@ import numpy as np
 import importlib
 from types import SimpleNamespace
 
-from purejax_ppo.config import PPOConfig
-from purejax_ppo.train import (
+from jax_rl.config import PPOConfig
+from jax_rl.train import (
     _extract_completed_episode_metrics,
     train,
 )
@@ -30,7 +30,7 @@ def _tiny_config(**overrides):
 
 
 def test_sps_calculation_validity(monkeypatch):
-    train_module = importlib.import_module("purejax_ppo.train")
+    train_module = importlib.import_module("jax_rl.train")
 
     config = _tiny_config(eval_episodes=0)
     captured = {}
@@ -73,7 +73,7 @@ def test_episode_masking_uses_completed_only():
 
 
 def test_metric_prefix_enforcement_with_eval(monkeypatch):
-    train_module = importlib.import_module("purejax_ppo.train")
+    train_module = importlib.import_module("jax_rl.train")
 
     config = _tiny_config(eval_episodes=1, eval_every=1)
     captured = {}

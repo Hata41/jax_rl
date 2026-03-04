@@ -8,11 +8,11 @@ import jax.numpy as jnp
 import optax
 import pytest
 
-from purejax_ppo.config import PPOConfig
-from purejax_ppo.train import train
-from purejax_ppo.types import TrainState
+from jax_rl.config import PPOConfig
+from jax_rl.train import train
+from jax_rl.types import TrainState
 
-train_module = importlib.import_module("purejax_ppo.train")
+train_module = importlib.import_module("jax_rl.train")
 
 def test_train_raises_when_num_envs_not_divisible_by_device_count(monkeypatch):
     monkeypatch.setattr(train_module.jax, "local_device_count", lambda: 4)

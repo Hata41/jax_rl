@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
 
-from purejax_ppo.env import make_stoa_env
-from purejax_ppo.rollout import _extract_done_and_truncated
+from jax_rl.env import make_stoa_env
+from jax_rl.rollout import _extract_done_and_truncated
 
 
 class MockTimeStep:

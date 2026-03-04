@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from purejax_ppo.logging import create_tensorboard_writer, log_scalar_metrics
+from jax_rl.logging import create_tensorboard_writer, log_scalar_metrics
 
 
 def test_tensorboard_writer_creates_event_file(tmp_path: Path):

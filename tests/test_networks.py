@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from purejax_ppo.networks import init_policy_value_params, policy_value_apply
+from jax_rl.networks import init_policy_value_params, policy_value_apply
 
 
 def _path_token(entry) -> str:

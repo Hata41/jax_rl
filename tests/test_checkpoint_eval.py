@@ -3,12 +3,12 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 
-from purejax_ppo.checkpoint import Checkpointer
-from purejax_ppo.config import PPOConfig
-from purejax_ppo.eval import evaluate
-from purejax_ppo.networks import init_policy_value_params
-from purejax_ppo.types import TrainState
-from purejax_ppo.update import make_actor_optimizer, make_critic_optimizer
+from jax_rl.checkpoint import Checkpointer
+from jax_rl.config import PPOConfig
+from jax_rl.eval import evaluate
+from jax_rl.networks import init_policy_value_params
+from jax_rl.types import TrainState
+from jax_rl.update import make_actor_optimizer, make_critic_optimizer
 
 
 def test_checkpoint_roundtrip(tmp_path: Path):

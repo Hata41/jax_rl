@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from purejax_ppo.advantages import compute_gae
+from jax_rl.advantages import compute_gae
 
 
 def test_gae_matches_manual_computation():

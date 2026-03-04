@@ -1,9 +1,9 @@
 import jax
 import jax.numpy as jnp
 
-from purejax_ppo.losses import ppo_loss
-from purejax_ppo.networks import init_policy_value_params, policy_value_apply
-from purejax_ppo.types import FlattenBatch
+from jax_rl.losses import ppo_loss
+from jax_rl.networks import init_policy_value_params, policy_value_apply
+from jax_rl.types import FlattenBatch
 
 
 def test_ppo_loss_is_finite():
