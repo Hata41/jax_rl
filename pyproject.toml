@@ -13,6 +13,8 @@ dependencies = [
     "pyyaml>=6.0.0",
     "gymnax>=0.0.8",
     "stoa-env",
+    "rustpool",
+    "jaxpallet",
     "tensorboard>=2.6",
     "setuptools==80.9.0",
 ]
@@ -26,7 +28,7 @@ dev = [
 ]
 
 [project.scripts]
-jax-rl-train = "jax_rl.cli:main"
+jax-rl-train = "purejax_ppo.cli:main"
 
 [build-system]
 requires = ["setuptools>=69"]
@@ -47,3 +49,5 @@ filterwarnings = [
 
 [tool.uv.sources]
 stoa-env = { git = "https://github.com/EdanToledo/Stoa.git", rev = "main" }
+rustpool = { path = "../rustpool", editable = true }
+jaxpallet = { path = "../jaxpallet", editable = true }

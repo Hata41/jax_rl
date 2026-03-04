@@ -1,5 +1,9 @@
 training:
-  env_name: CartPole-v1
+  # Environment routing:
+  # - rustpool: rustpool:<task_id>        (example: rustpool:BinPack-v0)
+  # - jaxpallet: jaxpallet:<preset>       (example: jaxpallet:PMC-PLD)
+  # - gymnax fallback: plain env id       (example: CartPole-v1)
+  env_name: jaxpallet:PMC-PLD
   seed: 0
   total_timesteps: 10000000
 
@@ -28,7 +32,7 @@ training:
   save_interval_steps: 0
   max_to_keep: 1
   keep_period:
-  resume_from: ""
+  resume_from:
 
   tensorboard_logdir: runs_tb
   tensorboard_run_name: default

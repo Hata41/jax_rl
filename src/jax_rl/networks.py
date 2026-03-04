@@ -1,4 +1,4 @@
-from typing import NamedTuple, Sequence
+from typing import Any, NamedTuple, Sequence
 
 import distrax
 import jax
@@ -6,6 +6,49 @@ import jax.numpy as jnp
 from flax import nnx
 
 from .types import Array, PolicyValueParams
+
+
+def _flatten_leaf_with_batch_ndim(leaf: Any, batch_ndim: int) -> Array:
+    arr = jnp.asarray(leaf, dtype=jnp.float32)
+    if batch_ndim <= 0:
+        return arr.reshape((-1,))
+    leading_shape = arr.shape[:batch_ndim]
+    return arr.reshape(leading_shape + (-1,))
+
+
+def flatten_observation_features(obs: Any, batch_ndim: int | None = None) -> tuple[Array, Array | None]:
+    if isinstance(obs, dict):
+        action_mask = obs.get("action_mask")
+        obs_without_mask = {key: value for key, value in obs.items() if key != "action_mask"}
+        leaves, _ = jax.tree_util.tree_flatten(obs_without_mask)
+        if action_mask is not None:
+            inferred_batch_ndim = max(jnp.asarray(action_mask).ndim - 1, 0)
+        elif leaves:
+            inferred_batch_ndim = 1 if jnp.asarray(leaves[0]).ndim > 1 else 0
+        else:
+            inferred_batch_ndim = 0
+        batch_ndim = inferred_batch_ndim if batch_ndim is None else batch_ndim
+
+        if leaves:
+            flat_leaves = [_flatten_leaf_with_batch_ndim(leaf, batch_ndim) for leaf in leaves]
+            features = jnp.concatenate(flat_leaves, axis=-1)
+        elif action_mask is not None:
+            features = _flatten_leaf_with_batch_ndim(action_mask, batch_ndim)
+        else:
+            raise ValueError("Observation dict is empty and cannot be flattened.")
+
+        normalized_action_mask = None
+        if action_mask is not None:
+            normalized_action_mask = jnp.asarray(action_mask, dtype=jnp.bool_)
+        return features, normalized_action_mask
+
+    obs_arr = jnp.asarray(obs, dtype=jnp.float32)
+    if batch_ndim is None:
+        batch_ndim = 1 if obs_arr.ndim > 1 else 0
+    if batch_ndim <= 0:
+        return obs_arr.reshape((-1,)), None
+    leading_shape = obs_arr.shape[:batch_ndim]
+    return obs_arr.reshape(leading_shape + (-1,)), None
 
 
 def _linear(
@@ -138,11 +181,20 @@ class PolicyValueModel(nnx.Module):
             rngs=rngs,
         )
 
-    def __call__(self, obs: Array):
-        actor_features = self.actor_torso(obs)
-        logits = self.actor_head(actor_features)
+    def __call__(self, obs: dict | Array):
+        obs_features, action_mask = flatten_observation_features(obs)
 
-        critic_features = self.critic_torso(obs)
+        actor_features = self.actor_torso(obs_features)
+        logits = self.actor_head(actor_features)
+        if action_mask is not None and not isinstance(logits, tuple):
+            valid_mask = action_mask
+            if valid_mask.ndim == 1:
+                valid_mask = valid_mask[jnp.newaxis, :]
+            has_any_valid = jnp.any(valid_mask, axis=-1, keepdims=True)
+            safe_mask = jnp.where(has_any_valid, valid_mask, jnp.ones_like(valid_mask, dtype=jnp.bool_))
+            logits = jnp.where(safe_mask, logits, jnp.asarray(-1e9, dtype=logits.dtype))
+
+        critic_features = self.critic_torso(obs_features)
         values = self.critic_head(critic_features).squeeze(-1)
         return logits, values
 
@@ -169,7 +221,7 @@ def init_policy_value_params(
     return PolicyValueParams(graphdef=graphdef, state=state)
 
 
-def policy_value_apply(graphdef: nnx.GraphDef, state: nnx.State, obs: Array):
+def policy_value_apply(graphdef: nnx.GraphDef, state: nnx.State, obs: dict | Array):
     model = nnx.merge(graphdef, state)
     logits, values = model(obs)
     return _distribution_from_logits(logits), values

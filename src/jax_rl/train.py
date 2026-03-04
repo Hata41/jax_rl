@@ -10,7 +10,7 @@ from .config import PPOConfig
 from .env import make_stoa_env
 from .eval import evaluate
 from .logging import create_tensorboard_writer, log_scalar_metrics
-from .networks import init_policy_value_params
+from .networks import flatten_observation_features, init_policy_value_params
 from .rollout import collect_rollout
 from .types import RunnerState, TrainState
 from .update import make_actor_optimizer, make_critic_optimizer, ppo_update
@@ -22,13 +22,6 @@ def _hidden_sizes(config: PPOConfig):
 
 def _unreplicate(tree):
     return jax.tree_util.tree_map(lambda x: x[0], tree)
-
-
-def _reshape_env_batch(tree, num_devices: int, num_envs_per_device: int):
-    return jax.tree_util.tree_map(
-        lambda x: x.reshape((num_devices, num_envs_per_device) + x.shape[1:]),
-        tree,
-    )
 
 
 def _replicate_tree(tree, num_devices: int):
@@ -86,6 +79,37 @@ def _extract_learning_rate(actor_opt_state) -> float:
     return float("nan")
 
 
+def _space_flat_dim(space) -> int:
+    shape = getattr(space, "shape", None)
+    if shape is not None:
+        return int(np.prod(shape))
+
+    spaces = getattr(space, "spaces", None)
+    if isinstance(spaces, dict):
+        return int(
+            sum(
+                _space_flat_dim(subspace)
+                for key, subspace in spaces.items()
+                if key != "action_mask"
+            )
+        )
+    if isinstance(space, dict):
+        return int(
+            sum(
+                _space_flat_dim(subspace)
+                for key, subspace in space.items()
+                if key != "action_mask"
+            )
+        )
+
+    if hasattr(space, "generate_value"):
+        sample_obs = space.generate_value()
+        flat_obs, _ = flatten_observation_features(sample_obs, batch_ndim=0)
+        return int(np.prod(flat_obs.shape))
+
+    raise ValueError(f"Unsupported observation space for flat dim inference: {type(space)}")
+
+
 def train(config: PPOConfig):
     if config.rollout_batch_size % config.minibatch_size != 0:
         raise ValueError(
@@ -108,9 +132,8 @@ def train(config: PPOConfig):
         )
     num_envs_per_device = config.num_envs // num_devices
 
-    env, env_params = make_stoa_env(config.env_name)
-    obs_shape = env.observation_space(env_params).shape
-    obs_dim = int(np.prod(obs_shape))
+    env, env_params = make_stoa_env(config.env_name, num_envs_per_device=num_envs_per_device)
+    obs_dim = _space_flat_dim(env.observation_space(env_params))
 
     action_space = env.action_space(env_params)
     if hasattr(action_space, "num_values"):
@@ -172,15 +195,20 @@ def train(config: PPOConfig):
 
     train_state = _replicate_tree(train_state, num_devices)
 
-    key, reset_key = jax.random.split(key)
+    def init_runner_state(per_device_train_state, runner_key):
+        next_key, reset_key = jax.random.split(runner_key)
+        env_state, timestep = env.reset(reset_key, env_params)
+        return RunnerState(
+            train_state=per_device_train_state,
+            env_state=env_state,
+            obs=timestep.observation,
+            key=next_key,
+        )
 
-    reset_keys = jax.random.split(reset_key, config.num_envs)
-    env_state, timesteps = jax.vmap(env.reset, in_axes=(0, None))(reset_keys, env_params)
-    obs = timesteps.observation
-    obs = obs.reshape((num_devices, num_envs_per_device) + obs.shape[1:])
-    env_state = _reshape_env_batch(env_state, num_devices, num_envs_per_device)
-    keys = jax.random.split(key, num_devices)
-    runner_state = RunnerState(train_state=train_state, env_state=env_state, obs=obs, key=keys)
+    key, runner_seed_key = jax.random.split(key)
+    keys = jax.random.split(runner_seed_key, num_devices)
+    pmap_init_runner_state = jax.pmap(init_runner_state, axis_name="device")
+    runner_state = pmap_init_runner_state(train_state, keys)
 
     def rollout_step(state: RunnerState):
         batch, last_values, next_obs, next_env_state, next_key, rollout_infos = collect_rollout(

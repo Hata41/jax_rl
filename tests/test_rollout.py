@@ -27,7 +27,7 @@ def test_timestep_done_and_truncated_parsing():
 
 
 def test_stoa_autoreset_exposes_next_obs_in_extras():
-    env, env_params = make_stoa_env("CartPole-v1")
+    env, env_params = make_stoa_env("CartPole-v1", num_envs_per_device=1)
 
     key = jax.random.PRNGKey(0)
     key, reset_key, action_key = jax.random.split(key, 3)
@@ -43,6 +43,7 @@ def test_stoa_autoreset_exposes_next_obs_in_extras():
     )
 
     action = env.action_space(env_params).sample(action_key)
+    action = jnp.expand_dims(action, axis=0)
     next_env_state, next_timestep = env.step(env_state, action, env_params)
     del next_env_state
     assert "next_obs" in next_timestep.extras

@@ -52,6 +52,27 @@ uv run --extra dev pytest tests/test_onnx_export.py -q
 - The training loop is functional and deterministic under a fixed seed.
 - Checkpoints are managed with Orbax (`orbax-checkpoint`) and store train state, PRNG key, metrics, and metadata.
 
+### Environment routing (`env_name`)
+
+`env_name` now supports three routing modes:
+
+- `rustpool:<task_id>`
+  - Uses `StoaRustpoolWrapper(task_id, num_envs_per_device)`.
+  - Native pre-batched per device and internally handles resets.
+  - No `AutoResetWrapper` and no outer `VmapWrapper` are applied.
+  - Rustpool action masks are normalized into `observation["action_mask"]`.
+
+- `jaxpallet:<preset>`
+  - Uses `JaxPalletToStoa(preset=...)`.
+  - Wrapped as: `RecordEpisodeMetrics -> AutoResetWrapper -> VmapWrapper(num_envs_per_device)`.
+  - `VmapWrapper` is intentionally outermost to match rustpool-style batched signatures.
+
+- Fallback (e.g. `CartPole-v1`)
+  - Uses gymnax via `GymnaxToStoa`.
+  - Wrapped as: `RecordEpisodeMetrics -> AutoResetWrapper -> VmapWrapper(num_envs_per_device)`.
+
+Implementation detail: environment reset/initialization happens inside `jax.pmap` in training to satisfy rustpool device-axis requirements.
+
 ## Migration
 
 ### Breaking changes (quick checklist)

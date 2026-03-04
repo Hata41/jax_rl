@@ -48,11 +48,7 @@ def collect_rollout(
         actions = dist.sample(action_key)
         log_probs = dist.log_prob(actions)
 
-        next_env_state, timestep = jax.vmap(env.step, in_axes=(0, 0, None))(
-            curr_env_state,
-            actions,
-            env_params,
-        )
+        next_env_state, timestep = env.step(curr_env_state, actions, env_params)
         next_obs = timestep.observation
         rewards = timestep.reward
         dones, truncated = _extract_done_and_truncated(timestep)

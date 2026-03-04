@@ -13,7 +13,7 @@ def evaluate(
     num_episodes: int = 10,
     max_steps_per_episode: int = 1_000,
 ):
-    env, env_params = make_stoa_env(config.env_name)
+    env, env_params = make_stoa_env(config.env_name, num_envs_per_device=1)
     key = jax.random.PRNGKey(config.seed)
 
     episode_returns = []
@@ -27,15 +27,15 @@ def evaluate(
         total_reward = 0.0
         step_count = 0
 
-        while (not bool(timestep.last())) and step_count < max_steps_per_episode:
-            dist, _ = policy_value_apply(params.graphdef, params.state, obs[jnp.newaxis, ...])
-            action = jnp.squeeze(dist.mode(), axis=0)
+        while (not bool(jnp.asarray(timestep.last()).all())) and step_count < max_steps_per_episode:
+            dist, _ = policy_value_apply(params.graphdef, params.state, obs)
+            action = dist.mode()
 
             key, step_key = jax.random.split(key)
             del step_key
             env_state, timestep = env.step(env_state, action, env_params)
             obs = timestep.observation
-            total_reward += float(timestep.reward)
+            total_reward += float(jnp.sum(jnp.asarray(timestep.reward, dtype=jnp.float32)))
             step_count += 1
 
         episode_returns.append(total_reward)

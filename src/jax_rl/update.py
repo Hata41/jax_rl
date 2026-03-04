@@ -65,7 +65,10 @@ def _flatten_batch(
 ) -> FlattenBatch:
     action_shape = rollout_batch.actions.shape[2:]
     return FlattenBatch(
-        obs=rollout_batch.obs.reshape((-1, rollout_batch.obs.shape[-1])),
+        obs=jax.tree_util.tree_map(
+            lambda x: x.reshape(-1, *x.shape[2:]),
+            rollout_batch.obs,
+        ),
         actions=rollout_batch.actions.reshape((-1,) + action_shape),
         old_log_probs=rollout_batch.log_probs.reshape((-1,)),
         old_values=rollout_batch.values.reshape((-1,)),
@@ -107,7 +110,7 @@ def ppo_update(
             f"got minibatch_size={config.minibatch_size} and num_devices={num_devices}."
         )
     local_minibatch_size = config.minibatch_size // num_devices
-    batch_size = rollout_batch.obs.shape[0] * rollout_batch.obs.shape[1]
+    batch_size = rollout_batch.rewards.shape[0] * rollout_batch.rewards.shape[1]
     num_minibatches = batch_size // local_minibatch_size
 
     def epoch_step(carry, _):
