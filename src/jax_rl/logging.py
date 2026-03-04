@@ -41,13 +41,24 @@ def describe(value: Any) -> Any:
 
 def _flatten_described_metrics(metrics: Mapping[str, Any]) -> dict[str, float]:
     flattened: dict[str, float] = {}
-    for key, value in metrics.items():
+
+    def _flatten(prefix: str, value: Any) -> None:
+        if isinstance(value, Mapping):
+            for sub_key, sub_value in value.items():
+                next_prefix = f"{prefix}_{sub_key}" if prefix else str(sub_key)
+                _flatten(next_prefix, sub_value)
+            return
+
         described = describe(value)
         if isinstance(described, dict):
             for stat_key, stat_value in described.items():
-                flattened[f"{key}_{stat_key}"] = float(stat_value)
+                flattened[f"{prefix}_{stat_key}"] = float(stat_value)
         else:
-            flattened[key] = float(described)
+            flattened[prefix] = float(described)
+
+    for key, value in metrics.items():
+        _flatten(str(key), value)
+
     return flattened
 
 
@@ -81,7 +92,7 @@ def _format_console_value(value: float) -> str:
     return f"{value:.6g}"
 
 
-def extract_completed_episode_metrics(rollout_infos: Mapping[str, Any]) -> dict[str, float]:
+def extract_completed_episode_metrics(rollout_infos: Mapping[str, Any]) -> dict[str, dict[str, float]]:
     returns = np.asarray(
         rollout_infos.get("returned_episode_returns", rollout_infos.get("episode_return")),
         dtype=np.float32,
@@ -99,8 +110,8 @@ def extract_completed_episode_metrics(rollout_infos: Mapping[str, Any]) -> dict[
         return {}
     completed_lengths = lengths[completed]
     return {
-        "episode_return": float(completed_returns.mean()),
-        "episode_length": float(completed_lengths.mean()),
+        "episode_return": describe(completed_returns),
+        "episode_length": describe(completed_lengths),
     }
 
 
@@ -110,7 +121,7 @@ class BaseLogger(ABC):
         pass
 
     @abstractmethod
-    def log_dict(self, metrics: Mapping[str, float], step: int, event: LogEvent) -> None:
+    def log_dict(self, metrics: Mapping[str, Any], step: int, event: LogEvent) -> None:
         pass
 
     @abstractmethod
@@ -140,17 +151,48 @@ class ConsoleLogger(BaseLogger):
     def log_stat(self, key: str, value: float, step: int, event: LogEvent) -> None:
         self.log_dict({key: value}, step=step, event=event)
 
-    def log_dict(self, metrics: Mapping[str, float], step: int, event: LogEvent) -> None:
+    def log_dict(self, metrics: Mapping[str, Any], step: int, event: LogEvent) -> None:
         del step
         if not metrics:
             return
         color = self._EVENT_COLORS[event]
         tag = event.name
-        entries = " | ".join(
-            f"{_normalize_console_key(key)}: {_format_console_value(float(value))}"
-            for key, value in sorted(metrics.items())
-        )
-        line = f"{tag} - {entries}"
+        key_width = 25
+        lines = [tag]
+
+        for key, raw_value in sorted(metrics.items()):
+            display_key = _normalize_console_key(key)
+
+            if isinstance(raw_value, Mapping):
+                stats = {str(k): float(v) for k, v in raw_value.items()}
+            else:
+                described = describe(raw_value)
+                if isinstance(described, dict):
+                    stats = {str(k): float(v) for k, v in described.items()}
+                else:
+                    stats = None
+                    scalar = float(described)
+
+            if stats is None:
+                value_text = _format_console_value(scalar)
+            else:
+                mean = stats.get("mean")
+                min_value = stats.get("min")
+                max_value = stats.get("max")
+                if mean is not None and min_value is not None and max_value is not None:
+                    value_text = (
+                        f"{_format_console_value(mean)} "
+                        f"(Min: {_format_console_value(min_value)}, Max: {_format_console_value(max_value)})"
+                    )
+                else:
+                    value_text = ", ".join(
+                        f"{_normalize_console_key(stat_key)}: {_format_console_value(stat_value)}"
+                        for stat_key, stat_value in sorted(stats.items())
+                    )
+
+            lines.append(f"{display_key + ':':<{key_width}} {value_text}")
+
+        line = "\n".join(lines)
         if color:
             line = f"{color}{line}{Style.RESET_ALL}"
         self._stream.write(f"{line}\n")
@@ -245,7 +287,17 @@ class jaxRL_Logger:
 
     def log(self, metrics: Mapping[str, Any], step: int, event: LogEvent) -> None:
         flattened = _flatten_described_metrics(metrics)
-        self._dispatch("log_dict", flattened, step, event)
+        for sink in self._sinks:
+            sink_name = type(sink).__name__
+            payload = metrics if isinstance(sink, ConsoleLogger) else flattened
+            try:
+                sink.log_dict(payload, step, event)
+            except Exception as exc:
+                _warn_once(
+                    self._warnings,
+                    f"dispatch_{sink_name}_log_dict",
+                    f"[jaxRL_Logger] Warning: sink {sink_name}.log_dict failed ({exc}).",
+                )
 
     def log_stat(self, key: str, value: Any, step: int, event: LogEvent) -> None:
         described = describe(value)

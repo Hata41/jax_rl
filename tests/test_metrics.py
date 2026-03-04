@@ -95,8 +95,23 @@ def test_episode_masking_uses_completed_only():
 
     metrics = extract_completed_episode_metrics(rollout_infos)
 
-    assert metrics["episode_return"] == 300.0
-    assert metrics["episode_length"] == 60.0
+    assert set(metrics["episode_return"].keys()) >= {"mean", "min", "max"}
+    assert set(metrics["episode_length"].keys()) >= {"mean", "min", "max"}
+    assert metrics["episode_return"]["mean"] == 300.0
+    assert metrics["episode_return"]["min"] == 300.0
+    assert metrics["episode_return"]["max"] == 300.0
+    assert metrics["episode_length"]["mean"] == 60.0
+    assert metrics["episode_length"]["min"] == 60.0
+    assert metrics["episode_length"]["max"] == 60.0
+
+
+def test_train_console_output_excludes_reward_mean(capsys):
+    config = _tiny_config(eval_episodes=0)
+
+    train(config)
+
+    out = capsys.readouterr().out
+    assert "Reward mean" not in out
 
 
 def test_metric_prefix_enforcement_with_eval(monkeypatch):

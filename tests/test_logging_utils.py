@@ -26,12 +26,37 @@ def test_console_logger_train_has_color_codes():
     stream = StringIO()
     logger = ConsoleLogger(stream=stream)
 
-    logger.log_dict({"loss_total": 1.23, "reward_mean": 2.0}, step=1, event=LogEvent.TRAIN)
+    logger.log_dict({"loss_total": 1.23, "done_fraction": 0.5}, step=1, event=LogEvent.TRAIN)
 
     output = stream.getvalue()
     assert Fore.MAGENTA in output
-    assert "TRAIN - " in output
-    assert "Loss total" in output
+    assert "TRAIN" in output
+    assert "Loss total:" in output
+
+
+def test_console_logger_tabular_alignment_for_described_metrics():
+    stream = StringIO()
+    logger = ConsoleLogger(stream=stream)
+
+    logger.log_dict(
+        {
+            "episode_return": {"mean": 10.0, "min": 7.0, "max": 12.0},
+            "episode_length": {"mean": 5.0, "min": 4.0, "max": 6.0},
+        },
+        step=1,
+        event=LogEvent.ABSOLUTE,
+    )
+
+    lines = [line for line in stream.getvalue().splitlines() if line]
+    assert lines[0] == "ABSOLUTE"
+    assert lines[1].startswith("Episode length:")
+    assert lines[2].startswith("Episode return:")
+    assert "(Min: 4, Max: 6)" in lines[1]
+    assert "(Min: 7, Max: 12)" in lines[2]
+
+    first_value_column = lines[1].index("5 ")
+    second_value_column = lines[2].index("10 ")
+    assert first_value_column == second_value_column
 
 
 class _MockSink(BaseLogger):

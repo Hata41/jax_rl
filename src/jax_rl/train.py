@@ -227,7 +227,6 @@ def train(config: PPOConfig):
             num_steps=config.num_steps,
         )
         rollout_metrics = {
-            "reward_mean": jnp.mean(batch.rewards),
             "done_fraction": jnp.mean(batch.dones.astype(jnp.float32)),
         }
         next_state = RunnerState(
