@@ -1,0 +1,37 @@
+training:
+  env_name: CartPole-v1
+  seed: 0
+  total_timesteps: 10000000
+
+  num_envs: 64
+  num_steps: 64
+
+  actor_lr: 0.0003
+  critic_lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+
+  clip_epsilon: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+
+  update_epochs: 1
+  minibatch_size: 256
+  max_grad_norm: 0.5
+
+  hidden_size: 64
+  hidden_layers: 2
+
+  log_every: 10
+
+  checkpoint_dir: checkpoints
+  save_interval_steps: 0
+  max_to_keep: 1
+  keep_period:
+  resume_from: ""
+
+  tensorboard_logdir: runs_tb
+  tensorboard_run_name: default
+
+  eval_every: 10
+  eval_episodes: 0

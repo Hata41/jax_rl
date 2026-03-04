@@ -1,0 +1,49 @@
+[project]
+name = "jax_rl"
+version = "0.1.0"
+description = "Pure JAX Proximal Policy Optimization baseline"
+requires-python = ">=3.11"
+dependencies = [
+    "jax>=0.5.0",
+    "jaxlib>=0.5.0",
+    "flax>=0.11.0",
+    "orbax-checkpoint>=0.11.0",
+    "optax>=0.2.4",
+    "distrax>=0.1.5",
+    "pyyaml>=6.0.0",
+    "gymnax>=0.0.8",
+    "stoa-env",
+    "tensorboard>=2.6",
+    "setuptools==80.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "jax2onnx",
+    "onnx",
+    "onnxruntime",
+]
+
+[project.scripts]
+jax-rl-train = "purejax_ppo.cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+filterwarnings = [
+    'ignore:Setting `jax_pmap_shmap_merge` is deprecated in JAX v0\.9\.0 and will be removed in JAX v0\.10\.0\.:DeprecationWarning:jax\._src\.config',
+]
+
+[tool.uv.sources]
+stoa-env = { git = "https://github.com/EdanToledo/Stoa.git", rev = "main" }
