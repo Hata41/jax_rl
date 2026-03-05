@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Any, cast
 
 from ..networks import flatten_observation_features
 
@@ -33,8 +34,9 @@ def space_flat_dim(space) -> int:
     if isinstance(space, list):
         return int(np.prod(space))
 
-    if hasattr(space, "generate_value"):
-        sample_obs = space.generate_value()
+    generate_value = getattr(cast(Any, space), "generate_value", None)
+    if callable(generate_value):
+        sample_obs = cast(Any, generate_value())
         flat_obs, _ = flatten_observation_features(sample_obs, batch_ndim=0)
         return int(np.prod(flat_obs.shape))
 

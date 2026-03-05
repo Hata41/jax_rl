@@ -1,12 +1,18 @@
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, cast
 
 import jax
 import orbax.checkpoint as ocp
 
 from .exceptions import CheckpointRestoreError
 from .types import PolicyValueParams, TrainState
+
+
+class RestorePayload(TypedDict):
+    step: int
+    items: dict[str, Any]
+    metadata: dict[str, Any]
 
 
 class Checkpointer:
@@ -93,7 +99,7 @@ class Checkpointer:
         target: Path,
         timestep: int | None,
         template_items: dict[str, object] | None,
-    ) -> dict[str, object]:
+    ) -> RestorePayload:
         if not target.exists():
             raise CheckpointRestoreError(f"Checkpoint path does not exist: {target}")
         if not target.is_dir():
@@ -113,7 +119,9 @@ class Checkpointer:
             else:
                 restored = temp_manager.restore(step)
             metadata = temp_manager.metadata() if hasattr(temp_manager, "metadata") else {}
-            return {"step": int(step), "items": restored, "metadata": metadata}
+            restored_items = cast(dict[str, Any], restored)
+            metadata_dict = cast(dict[str, Any], metadata)
+            return {"step": int(step), "items": restored_items, "metadata": metadata_dict}
 
         temp_manager = ocp.CheckpointManager(
             str(target),
@@ -128,13 +136,15 @@ class Checkpointer:
         else:
             restored = temp_manager.restore(step)
         metadata = temp_manager.metadata() if hasattr(temp_manager, "metadata") else {}
-        return {"step": int(step), "items": restored, "metadata": metadata}
+        restored_items = cast(dict[str, Any], restored)
+        metadata_dict = cast(dict[str, Any], metadata)
+        return {"step": int(step), "items": restored_items, "metadata": metadata_dict}
 
     def _restore_from_manager(
         self,
         timestep: int | None,
         template_items: dict[str, object] | None,
-    ) -> dict[str, object]:
+    ) -> RestorePayload:
         step = int(timestep) if timestep is not None else self._manager.latest_step()
         if step is None:
             raise CheckpointRestoreError(
@@ -145,7 +155,9 @@ class Checkpointer:
         else:
             restored = self._manager.restore(step)
         metadata = self._manager.metadata() if hasattr(self._manager, "metadata") else {}
-        return {"step": int(step), "items": restored, "metadata": metadata}
+        restored_items = cast(dict[str, Any], restored)
+        metadata_dict = cast(dict[str, Any], metadata)
+        return {"step": int(step), "items": restored_items, "metadata": metadata_dict}
 
     def latest_step(self) -> int | None:
         latest = self._manager.latest_step()

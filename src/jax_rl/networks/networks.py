@@ -1,5 +1,5 @@
 import inspect
-from typing import Mapping, NamedTuple, Sequence
+from typing import Mapping, NamedTuple, Sequence, TypeAlias
 
 import distrax
 import hydra
@@ -91,7 +91,7 @@ class Torso(nnx.Module):
             _linear(
                 in_dim=d_in,
                 out_dim=d_out,
-                scale=jnp.sqrt(2.0),
+                scale=2.0**0.5,
                 rngs=rngs,
             )
             for d_in, d_out in zip(sizes[:-1], sizes[1:])
@@ -113,10 +113,10 @@ class CategoricalPolicyDist(NamedTuple):
 
     def log_prob(self, actions: Array) -> Array:
         actions = jnp.asarray(actions, dtype=jnp.int32)
-        return distrax.Categorical(logits=self.logits).log_prob(actions)
+        return jnp.asarray(distrax.Categorical(logits=self.logits).log_prob(actions))
 
     def entropy(self) -> Array:
-        return distrax.Categorical(logits=self.logits).entropy()
+        return jnp.asarray(distrax.Categorical(logits=self.logits).entropy())
 
     def mode(self) -> Array:
         return jnp.argmax(self.logits, axis=-1)
@@ -158,8 +158,12 @@ def _torso_out_dim(obs_dim: int, hidden_sizes: Sequence[int]) -> int:
 
 class ActorHead(nnx.Module):
     def __init__(self, in_dim: int, action_dims: int | Sequence[int], rngs: nnx.Rngs):
-        self._is_discrete = isinstance(action_dims, int)
-        branch_dims = (int(action_dims),) if self._is_discrete else tuple(int(v) for v in action_dims)
+        if isinstance(action_dims, int):
+            self._is_discrete = True
+            branch_dims = (int(action_dims),)
+        else:
+            self._is_discrete = False
+            branch_dims = tuple(int(v) for v in action_dims)
         self.branches = nnx.List(
             [
                 _linear(
@@ -190,7 +194,7 @@ class TransformerBlock(nnx.Module):
             rngs=rngs,
         )
         self.norm_mlp = nnx.LayerNorm(num_features=dim, rngs=rngs)
-        self.mlp_fc1 = _linear(dim, dim * 4, scale=jnp.sqrt(2.0), rngs=rngs)
+        self.mlp_fc1 = _linear(dim, dim * 4, scale=2.0**0.5, rngs=rngs)
         self.mlp_fc2 = _linear(dim * 4, dim, scale=1.0, rngs=rngs)
 
     def __call__(self, q: Array, k: Array, v: Array, mask: Array | None = None) -> Array:
@@ -320,8 +324,8 @@ class RustpalletInputAdapterV1(nnx.Module):
         item_feature_dim: int,
         rngs: nnx.Rngs,
     ):
-        self.ems_embed = _linear(int(ems_feature_dim), int(hidden_dim), scale=jnp.sqrt(2.0), rngs=rngs)
-        self.item_embed = _linear(int(item_feature_dim), int(hidden_dim), scale=jnp.sqrt(2.0), rngs=rngs)
+        self.ems_embed = _linear(int(ems_feature_dim), int(hidden_dim), scale=2.0**0.5, rngs=rngs)
+        self.item_embed = _linear(int(item_feature_dim), int(hidden_dim), scale=2.0**0.5, rngs=rngs)
 
     def __call__(self, obs: dict) -> tuple[Array, Array, Array, Array]:
         ems_pos = jnp.asarray(obs["ems_pos"], dtype=jnp.float32)
@@ -605,6 +609,9 @@ def _distribution_from_logits(logits):
     return CategoricalPolicyDist(logits=logits)
 
 
+DistributionLike: TypeAlias = CategoricalPolicyDist | MultiDiscretePolicyDist
+
+
 def _instantiate_target_tree(
     config: object,
     shared_rngs: nnx.Rngs,
@@ -733,7 +740,11 @@ def init_policy_value_params(
     return PolicyValueParams(graphdef=graphdef, state=state)
 
 
-def policy_value_apply(graphdef: nnx.GraphDef, state: nnx.State, obs: dict | Array):
+def policy_value_apply(
+    graphdef: nnx.GraphDef,
+    state: nnx.State,
+    obs: dict | Array,
+) -> tuple[DistributionLike, Array]:
     model = nnx.merge(graphdef, state)
     logits, values = model(obs)
-    return _distribution_from_logits(logits), values
+    return _distribution_from_logits(logits), jnp.asarray(values)

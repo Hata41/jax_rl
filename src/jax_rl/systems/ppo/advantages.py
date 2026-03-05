@@ -34,22 +34,22 @@ def compute_gae(
     last_values = last_values.astype(dtype)
     done_mask = dones.astype(jnp.bool_)
     truncated_mask = truncated.astype(jnp.bool_)
-    gamma = jnp.asarray(gamma, dtype=dtype)
-    gae_lambda = jnp.asarray(gae_lambda, dtype=dtype)
+    gamma_arr = jnp.asarray(gamma, dtype=dtype)
+    gae_lambda_arr = jnp.asarray(gae_lambda, dtype=dtype)
 
     if bootstrap_values is not None:
         bootstrap_values = bootstrap_values.astype(dtype)
 
-        def gae_scan(carry, transition):
+        def gae_scan_bootstrap(carry, transition):
             gae = carry
             reward, done, trunc, value, bootstrap_value = transition
             terminated = jnp.logical_and(done, jnp.logical_not(trunc)).astype(dtype)
-            delta = reward + gamma * bootstrap_value * (1.0 - terminated) - value
-            gae = delta + gamma * gae_lambda * (1.0 - terminated) * gae
+            delta = reward + gamma_arr * bootstrap_value * (1.0 - terminated) - value
+            gae = delta + gamma_arr * gae_lambda_arr * (1.0 - terminated) * gae
             return gae, gae
 
         _, advantages_rev = jax.lax.scan(
-            gae_scan,
+            gae_scan_bootstrap,
             jnp.zeros_like(last_values),
             (
                 rewards[::-1],
@@ -60,16 +60,16 @@ def compute_gae(
             ),
         )
     else:
-        def gae_scan(carry, transition):
+        def gae_scan_standard(carry, transition):
             gae, next_value = carry
             reward, done, trunc, value = transition
             terminated = jnp.logical_and(done, jnp.logical_not(trunc)).astype(dtype)
-            delta = reward + gamma * next_value * (1.0 - terminated) - value
-            gae = delta + gamma * gae_lambda * (1.0 - terminated) * gae
+            delta = reward + gamma_arr * next_value * (1.0 - terminated) - value
+            gae = delta + gamma_arr * gae_lambda_arr * (1.0 - terminated) * gae
             return (gae, value), gae
 
         (_, _), advantages_rev = jax.lax.scan(
-            gae_scan,
+            gae_scan_standard,
             (jnp.zeros_like(last_values), last_values),
             (rewards[::-1], done_mask[::-1], truncated_mask[::-1], values[::-1]),
         )

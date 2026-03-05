@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -33,7 +34,8 @@ def main(cfg: DictConfig) -> None:
     if isinstance(typed, ExperimentConfig):
         config = typed
     elif isinstance(typed, dict):
-        config = ExperimentConfig(**typed)
+        typed_config: dict[str, Any] = {str(key): value for key, value in typed.items()}
+        config = ExperimentConfig(**typed_config)
     else:
         raise TypeError(
             f"Hydra config did not resolve to ExperimentConfig. Got: {type(typed)}"

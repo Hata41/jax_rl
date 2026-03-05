@@ -5,7 +5,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 import sys
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import jax
 import numpy as np
@@ -177,6 +177,7 @@ class ConsoleLogger(BaseLogger):
 
         for key, raw_value in sorted(metrics.items()):
             display_key = _normalize_console_key(key)
+            scalar = float("nan")
 
             if isinstance(raw_value, Mapping):
                 stats = {str(k): float(v) for k, v in raw_value.items()}
@@ -234,10 +235,12 @@ class TensorBoardLogger(BaseLogger):
         return f"{prefix}/{key}"
 
     def log_stat(self, key: str, value: float, step: int, event: LogEvent) -> None:
-        summary = self._summary_cls(
-            value=[self._summary_cls.Value(tag=self._to_tag(key, event), simple_value=float(value))]
+        summary_cls = cast(Any, self._summary_cls)
+        event_cls = cast(Any, self._event_cls)
+        summary = summary_cls(
+            value=[summary_cls.Value(tag=self._to_tag(key, event), simple_value=float(value))]
         )
-        logged_event = self._event_cls(wall_time=time.time(), step=int(step), summary=summary)
+        logged_event = event_cls(wall_time=time.time(), step=int(step), summary=summary)
         self._writer.add_event(logged_event)
 
     def log_dict(self, metrics: Mapping[str, float], step: int, event: LogEvent) -> None:
@@ -323,7 +326,7 @@ class jaxRL_Logger:
         self._dispatch("log_stat", key, scalar, step, event)
 
     def log_config(self, config: Any) -> None:
-        if is_dataclass(config):
+        if is_dataclass(config) and not isinstance(config, type):
             config_data = asdict(config)
         elif isinstance(config, Mapping):
             config_data = dict(config)

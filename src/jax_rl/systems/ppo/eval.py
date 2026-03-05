@@ -1,5 +1,5 @@
 import time
-from typing import Any
+from typing import Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -81,10 +81,13 @@ class Evaluator:
             num_envs_per_device=self.num_envs_per_device,
             env_kwargs=self.env_kwargs,
         )
+        env = self.env
+        assert env is not None
+        env_params = self.env_params
 
         def _device_eval(params: PolicyValueParams, device_key):
             key, reset_key = jax.random.split(device_key)
-            env_state, timestep = self.env.reset(reset_key, self.env_params)
+            env_state, timestep = env.reset(reset_key, cast(Any, env_params))
             init_active_mask = jnp.ones((self.num_envs_per_device,), dtype=jnp.float32)
 
             def _env_step(carry, _):
@@ -99,7 +102,7 @@ class Evaluator:
                     action_key,
                 )
 
-                next_env_state, next_timestep = self.env.step(curr_env_state, action, self.env_params)
+                next_env_state, next_timestep = env.step(curr_env_state, action, cast(Any, env_params))
                 reward = jnp.asarray(next_timestep.reward, dtype=jnp.float32)
                 done = jnp.asarray(next_timestep.last(), dtype=jnp.float32)
 
@@ -126,15 +129,17 @@ class Evaluator:
             steps = jnp.sum(outputs["active_mask"], axis=0)
             return returns, steps
 
+        params_in_axes = cast(Any, PolicyValueParams._make((None, 0)))
         self._pmap_eval = jax.pmap(
             _device_eval,
             axis_name="device",
-            in_axes=(PolicyValueParams(graphdef=None, state=0), 0),
+            in_axes=(params_in_axes, 0),
         )
 
     def run(self, replicated_params: PolicyValueParams, seed: int) -> dict[str, float | int]:
         if self.disabled:
             return _zero_metrics()
+        assert self._pmap_eval is not None
 
         device_keys = jax.random.split(jax.random.PRNGKey(int(seed)), self.num_devices)
         returns, steps = self._pmap_eval(replicated_params, device_keys)

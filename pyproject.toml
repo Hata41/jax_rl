@@ -24,6 +24,12 @@ dependencies = [
     "jax2onnx",
     "onnx",
     "onnxruntime",
+    "nvitop",
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.390",
 ]
 
 [project.scripts]
@@ -58,3 +64,12 @@ stoa-env = { git = "https://github.com/EdanToledo/Stoa.git", rev = "main" }
 rustpool = { path = "../rustpool" }
 rlpallet = { path = "../rlpallet", editable = true }
 jaxpallet = { path = "../jaxpallet", editable = true }
+
+[tool.pyright]
+include = ["src/jax_rl"]
+exclude = ["tests"]
+typeCheckingMode = "standard"
+pythonVersion = "3.11"
+venvPath = "."
+venv = ".venv"
+reportMissingTypeStubs = false

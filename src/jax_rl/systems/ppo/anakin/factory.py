@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from typing import Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -27,7 +28,8 @@ def _infer_action_dims(action_space) -> int | tuple[int, ...]:
     if isinstance(action_space, list) and len(action_space) == 1:
         return int(action_space[0])
     if hasattr(action_space, "num_values"):
-        num_values = np.asarray(action_space.num_values)
+        action_space_obj = cast(Any, action_space)
+        num_values = np.asarray(action_space_obj.num_values)
         if num_values.ndim == 0:
             return int(num_values)
         return tuple(int(v) for v in num_values.tolist())
@@ -63,9 +65,9 @@ def _setup_environment(config: ExperimentConfig):
         num_envs_per_device=num_envs_per_device,
         env_kwargs=config.env.env_kwargs,
     )
-    obs_space = env.observation_space(env_params)
+    obs_space = env.observation_space(cast(Any, env_params))
     obs_dim = space_flat_dim(obs_space)
-    action_dims = _infer_action_dims(env.action_space(env_params))
+    action_dims = _infer_action_dims(env.action_space(cast(Any, env_params)))
 
     return env, env_params, obs_space, obs_dim, action_dims, num_devices, num_envs_per_device
 

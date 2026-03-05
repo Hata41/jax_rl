@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from gymnax import make as make_gymnax_env
 from stoa import AddRNGKey, AutoResetWrapper, RecordEpisodeMetrics
@@ -50,7 +50,8 @@ class BatchedRecordEpisodeMetrics(RecordEpisodeMetrics):
         }
 
         new_extras = {**timestep.extras, "episode_metrics": episode_metrics}
-        timestep = timestep.replace(extras=new_extras)
+        timestep_obj = cast(Any, timestep)
+        timestep = timestep_obj.replace(extras=new_extras)
         return state, timestep
 
 class RustpoolObsWrapper(Wrapper):
@@ -83,7 +84,8 @@ class RustpoolObsWrapper(Wrapper):
                 normalized_next_obs = self._normalize_observation(next_obs, action_mask)
                 new_extras = {**extras, "next_obs": normalized_next_obs}
 
-        return timestep.replace(observation=new_observation, extras=new_extras)
+        timestep_obj = cast(Any, timestep)
+        return timestep_obj.replace(observation=new_observation, extras=new_extras)
 
     def reset(self, rng_key, env_params=None):
         state, timestep = self._env.reset(rng_key, env_params)

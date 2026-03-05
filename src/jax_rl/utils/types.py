@@ -2,10 +2,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, NamedTuple
 
+import chex
 import jax
 from flax import nnx
 
 Array = jax.Array
+ArrayTree = chex.ArrayTree
+PRNGKey = chex.PRNGKey
 Params = Any
 
 
