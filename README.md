@@ -44,10 +44,10 @@ Primary package surface is exported from `src/jax_rl/__init__.py`:
 
 The training entry point is in `src/jax_rl/cli.py`:
 
-1. Parse `--config` path.
-2. Load YAML `training` section into `PPOConfig`.
-3. Execute `train(config)`.
-4. Optionally run post-train `evaluate(...)`.
+1. Load `config/train.yaml` via Hydra.
+2. Apply command-line overrides (for example `actor_lr=0.001`).
+3. Convert the composed config to a typed `PPOConfig` object.
+4. Execute `train(config)` and optionally post-train `evaluate(...)`.
 
 #### Runtime Defaults
 
@@ -63,7 +63,7 @@ Notable computed properties:
 - `num_updates = total_timesteps // rollout_batch_size`
 - `local_device_count = jax.local_device_count()`
 
-Network creation is Hydra-driven through `training.network._target_`, with runtime dimensions injected at construction.
+Network creation is Hydra-driven through `network._target_`, with runtime dimensions injected at construction.
 
 ### 5) Core Data Model
 
@@ -336,8 +336,11 @@ uv pip install -e .[dev]
 # edit the full training setup in config/train.yaml, then run
 uv run jax-rl-train
 
-# explicit config path
-uv run jax-rl-train --config config/train.yaml
+# run with Hydra overrides
+uv run jax-rl-train actor_lr=0.001 num_envs=32
+
+# nested overrides
+uv run jax-rl-train network.hidden_dim=128
 
 # examples (set these values inside config/train.yaml):
 # save_interval_steps: 50
@@ -361,17 +364,17 @@ Use either of these:
 
 ```bash
 # preferred console script
-uv run jax-rl-train --config config/train.yaml
+uv run jax-rl-train
 
 # equivalent module form
-uv run python -m jax_rl.cli --config config/train.yaml
+uv run python -m jax_rl.cli
 ```
 
 Do **not** add a `train` subcommand (the CLI is single-command):
 
 ```bash
 # wrong
-uv run python -m jax_rl.cli train --config config/train.yaml
+uv run python -m jax_rl.cli train
 ```
 
 ### 2) Quick start flow
@@ -383,8 +386,11 @@ uv sync
 # optional: dev extras for testing/export
 uv sync --extra dev
 
-# launch training with current config file
-uv run jax-rl-train --config config/train.yaml
+# launch training with default config
+uv run jax-rl-train
+
+# launch with overrides
+uv run jax-rl-train actor_lr=0.0005 num_envs=16
 ```
 
 ### 3) Minimal config profile (fast local smoke runs)
@@ -407,34 +413,31 @@ This gives short runs that are useful to validate installation and end-to-end pi
 #### CartPole / Gymnax fallback
 
 ```yaml
-training:
-  env_name: CartPole-v1
-  total_timesteps: 200000
-  num_envs: 16
-  num_steps: 128
-  minibatch_size: 256
+env_name: CartPole-v1
+total_timesteps: 200000
+num_envs: 16
+num_steps: 128
+minibatch_size: 256
 ```
 
 #### JaxPallet
 
 ```yaml
-training:
-  env_name: jaxpallet:PMC-PLD
-  total_timesteps: 500000
-  num_envs: 8
-  num_steps: 64
-  minibatch_size: 128
+env_name: jaxpallet:PMC-PLD
+total_timesteps: 500000
+num_envs: 8
+num_steps: 64
+minibatch_size: 128
 ```
 
 #### RustPool
 
 ```yaml
-training:
-  env_name: rustpool:BinPack-v0
-  total_timesteps: 500000
-  num_envs: 8
-  num_steps: 64
-  minibatch_size: 128
+env_name: rustpool:BinPack-v0
+total_timesteps: 500000
+num_envs: 8
+num_steps: 64
+minibatch_size: 128
 ```
 
 Notes for `rustpool`:
@@ -447,9 +450,8 @@ Notes for `rustpool`:
 Enable in config:
 
 ```yaml
-training:
-  tensorboard_logdir: runs_tb
-  tensorboard_run_name: exp_001
+tensorboard_logdir: runs_tb
+tensorboard_run_name: exp_001
 ```
 
 Run training, then in another terminal:
@@ -465,10 +467,9 @@ If TensorBoard backend initialization fails, training continues and a warning is
 Example config values:
 
 ```yaml
-training:
-  checkpoint_dir: checkpoints
-  save_interval_steps: 100
-  resume_from: checkpoints
+checkpoint_dir: checkpoints
+save_interval_steps: 100
+resume_from: checkpoints
 ```
 
 Behavior:
@@ -498,9 +499,9 @@ TAG - Key: Value | Key: Value
   - Cause: old script entry point.
   - Fix: use current project metadata and run via `uv run jax-rl-train`.
 
-- `error: unrecognized arguments: train`
+- `Error: unrecognized arguments: train`
   - Cause: attempted subcommand mode.
-  - Fix: remove `train` token and run `uv run python -m jax_rl.cli --config ...`.
+  - Fix: remove `train` token and run `uv run python -m jax_rl.cli`.
 
 - `CUDA_ERROR_NO_DEVICE` plugin warning on CPU-only machine
   - Project runtime defaults force CPU for project entry points/tests.
@@ -524,7 +525,7 @@ export JAX_SKIP_CUDA_CONSTRAINTS_CHECK=1
 uv run --extra dev pytest tests/test_integration.py -q
 
 # 2) minimal local training smoke
-uv run jax-rl-train --config config/train.yaml
+uv run jax-rl-train
 
 # 3) optional full suite
 uv run --extra dev pytest -q

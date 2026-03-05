@@ -1,44 +1,47 @@
-training:
-  # Environment routing:
-  # - rustpool: rustpool:<task_id>        (example: rustpool:BinPack-v0)
-  # - jaxpallet: jaxpallet:<preset>       (example: jaxpallet:PMC-PLD)
-  # - gymnax fallback: plain env id       (example: CartPole-v1)
-  env_name: rustpool:BinPack-v0
-  seed: 0
-  total_timesteps: 2048
+defaults:
+  - base_config
+  - _self_
 
-  num_envs: 8
-  num_steps: 32
+# Environment routing:
+# - rustpool: rustpool:<task_id>        (example: rustpool:BinPack-v0)
+# - jaxpallet: jaxpallet:<preset>       (example: jaxpallet:PMC-PLD)
+# - gymnax fallback: plain env id       (example: CartPole-v1)
+env_name: rustpool:BinPack-v0
+seed: 0
+total_timesteps: 2048
 
-  actor_lr: 0.0003
-  critic_lr: 0.0003
-  gamma: 0.99
-  gae_lambda: 0.95
+num_envs: 8
+num_steps: 32
 
-  clip_epsilon: 0.2
-  value_coef: 0.5
-  entropy_coef: 0.01
+actor_lr: 0.0003
+critic_lr: 0.0003
+gamma: 0.99
+gae_lambda: 0.95
 
-  update_epochs: 1
-  minibatch_size: 64
-  max_grad_norm: 0.5
+clip_epsilon: 0.2
+value_coef: 0.5
+entropy_coef: 0.01
 
-  network:
-    _target_: jax_rl.networks.BinPackPolicyValueModel
-    hidden_dim: 32
-    num_heads: 2
-    num_layers: 1
+update_epochs: 1
+minibatch_size: 64
+max_grad_norm: 0.5
 
-  log_every: 1
+network:
+  _target_: jax_rl.networks.BinPackPolicyValueModel
+  hidden_dim: 32
+  num_heads: 2
+  num_layers: 1
 
-  checkpoint_dir: checkpoints
-  save_interval_steps: 0
-  max_to_keep: 1
-  keep_period:
-  resume_from:
+log_every: 1
 
-  tensorboard_logdir:
-  tensorboard_run_name: minimal
+checkpoint_dir: checkpoints
+save_interval_steps: 0
+max_to_keep: 1
+keep_period: null
+resume_from: null
 
-  eval_every: 1
-  eval_episodes: 0
+tensorboard_logdir: null
+tensorboard_run_name: minimal
+
+eval_every: 1
+eval_episodes: 0

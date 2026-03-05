@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from hydra.core.config_store import ConfigStore
 import jax
 
 
-@dataclass(frozen=True)
+@dataclass
 class PPOConfig:
     env_name: str = "CartPole-v1"
     seed: int = 0
@@ -57,3 +58,17 @@ class PPOConfig:
     @property
     def local_device_count(self) -> int:
         return jax.local_device_count()
+
+
+_CONFIGS_REGISTERED = False
+
+
+def register_configs() -> None:
+    """Register structured config schemas for Hydra/OmegaConf."""
+    global _CONFIGS_REGISTERED
+    if _CONFIGS_REGISTERED:
+        return
+
+    cs = ConfigStore.instance()
+    cs.store(name="base_config", node=PPOConfig)
+    _CONFIGS_REGISTERED = True

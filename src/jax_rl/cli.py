@@ -1,9 +1,7 @@
-import argparse
-from dataclasses import fields
+import hydra
+from omegaconf import DictConfig, OmegaConf
 
-import yaml
-
-from .config import PPOConfig
+from .config import PPOConfig, register_configs
 from .runtime import configure_jax_runtime_defaults
 
 configure_jax_runtime_defaults()
@@ -11,46 +9,19 @@ configure_jax_runtime_defaults()
 from .eval import evaluate
 from .train import train
 
+register_configs()
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Pure JAX PPO trainer")
-    parser.add_argument("--config", default="config/train.yaml")
-    return parser.parse_args()
+@hydra.main(version_base=None, config_path="../../config", config_name="train")
+def main(cfg: DictConfig) -> None:
+    typed = OmegaConf.to_object(cfg)
 
+    if isinstance(typed, PPOConfig):
+        config = typed
+    elif isinstance(typed, dict):
+        config = PPOConfig(**typed)
+    else:
+        raise TypeError(f"Hydra config did not resolve to PPOConfig. Got: {type(typed)}")
 
-def _normalize_optional_string(value):
-    if value is None:
-        return None
-    if isinstance(value, str) and value.strip() == "":
-        return None
-    return value
-
-
-def load_config_file(config_path: str):
-    with open(config_path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-
-    if "training" not in raw or not isinstance(raw["training"], dict):
-        raise ValueError("Config must define a [training] table.")
-
-    section = dict(raw["training"])
-
-    ppo_fields = {item.name for item in fields(PPOConfig)}
-    unknown_keys = sorted(set(section.keys()) - ppo_fields)
-    if unknown_keys:
-        raise ValueError(f"Unknown config keys: {', '.join(unknown_keys)}")
-
-    for optional_key in ("resume_from", "tensorboard_logdir"):
-        if optional_key in section:
-            section[optional_key] = _normalize_optional_string(section[optional_key])
-
-    config = PPOConfig(**section)
-    return config
-
-
-def main():
-    args = parse_args()
-    config = load_config_file(args.config)
     output = train(config)
     if output.get("tensorboard_run_dir"):
         print(f"tensorboard_run_dir={output['tensorboard_run_dir']}")
