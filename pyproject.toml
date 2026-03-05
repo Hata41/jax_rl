@@ -25,6 +25,8 @@ dependencies = [
     "onnx",
     "onnxruntime",
     "nvitop",
+    "mctx",
+    "flashbax",
 ]
 
 [dependency-groups]

@@ -14,40 +14,57 @@ def _config_dir() -> str:
     return str(Path(__file__).resolve().parents[1] / "config")
 
 
-def test_hydra_compose_loads_train_yaml_and_converts_to_typed_config():
+def _to_typed_config(cfg) -> ExperimentConfig:
+    obj = OmegaConf.to_object(cfg)
+    if isinstance(obj, dict) and len(obj) == 1:
+        only_value = next(iter(obj.values()))
+        if isinstance(only_value, ExperimentConfig):
+            return only_value
+    assert isinstance(obj, ExperimentConfig)
+    return obj
+
+
+def test_hydra_compose_loads_ppo_train_binpack_and_converts_to_typed_config():
     register_configs()
     with initialize_config_dir(version_base=None, config_dir=_config_dir()):
-        cfg = compose(config_name="train")
+        cfg = compose(config_name="ppo/train_binpack")
 
-    obj = OmegaConf.to_object(cfg)
-    assert isinstance(obj, ExperimentConfig)
+    obj = _to_typed_config(cfg)
+    assert obj.system.name == "ppo"
 
 
-def test_hydra_compose_loads_train_rlpallet_uld_yaml_and_converts_to_typed_config():
+def test_hydra_compose_loads_ppo_train_rlpallet_uld_yaml_and_converts_to_typed_config():
     register_configs()
     with initialize_config_dir(version_base=None, config_dir=_config_dir()):
-        cfg = compose(config_name="train_rlpallet_uld")
+        cfg = compose(config_name="ppo/train_uldenv")
 
-    obj = OmegaConf.to_object(cfg)
-    assert isinstance(obj, ExperimentConfig)
+    obj = _to_typed_config(cfg)
     assert obj.env.env_name == "rlpallet:UldEnv-v2"
+
+
+def test_hydra_compose_loads_train_alphazero_yaml_and_converts_to_typed_config():
+    register_configs()
+    with initialize_config_dir(version_base=None, config_dir=_config_dir()):
+        cfg = compose(config_name="alphazero/train_binpack")
+
+    obj = _to_typed_config(cfg)
+    assert obj.system.name == "alphazero"
 
 
 def test_hydra_compose_overrides_apply_to_typed_config():
     register_configs()
     with initialize_config_dir(version_base=None, config_dir=_config_dir()):
         cfg = compose(
-            config_name="train",
+            config_name="ppo/train_binpack",
             overrides=[
-                "system.actor_lr=0.005",
-                "system.num_envs=32",
-                "system.cuda_visible_devices='0,1'",
-                "+env.env_kwargs.max_items=42",
+                "ppo.system.actor_lr=0.005",
+                "ppo.system.num_envs=32",
+                "ppo.system.cuda_visible_devices='0,1'",
+                "ppo.env.env_kwargs.max_items=42",
             ],
         )
 
-    obj = OmegaConf.to_object(cfg)
-    assert isinstance(obj, ExperimentConfig)
+    obj = _to_typed_config(cfg)
     assert obj.system.actor_lr == pytest.approx(0.005)
     assert obj.system.num_envs == 32
     assert obj.system.cuda_visible_devices == "0,1"
@@ -58,16 +75,18 @@ def test_hydra_compose_rejects_unknown_override_key():
     register_configs()
     with initialize_config_dir(version_base=None, config_dir=_config_dir()):
         with pytest.raises(ConfigCompositionException):
-            compose(config_name="train", overrides=["this_key_does_not_exist=10"])
+            compose(
+                config_name="ppo/train_binpack",
+                overrides=["ppo.this_key_does_not_exist=10"],
+            )
 
 
 def test_binpack_network_config_instantiates_without_base_mlp_keys():
     register_configs()
     with initialize_config_dir(version_base=None, config_dir=_config_dir()):
-        cfg = compose(config_name="train")
+        cfg = compose(config_name="ppo/train_binpack")
 
-    obj = OmegaConf.to_object(cfg)
-    assert isinstance(obj, ExperimentConfig)
+    obj = _to_typed_config(cfg)
 
     params = init_policy_value_params(
         key=jax.random.PRNGKey(0),

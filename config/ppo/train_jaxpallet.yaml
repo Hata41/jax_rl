@@ -1,0 +1,56 @@
+defaults:
+  - /base_config
+  - _self_
+
+env:
+  env_name: jaxpallet:PMC-PLD
+  seed: 0
+  env_kwargs:
+    max_items: 50
+
+system:
+  name: ppo
+  total_timesteps: 2048000
+  platform: null
+  cuda_visible_devices: null
+  num_envs: 64
+  num_steps: 32
+  actor_lr: 0.0003
+  critic_lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+  update_epochs: 1
+  minibatch_size: 64
+  max_grad_norm: 0.5
+
+network:
+  _delete_: true
+  _target_: jax_rl.networks.BinPackPolicyValueModel
+  hidden_dim: 32
+  num_heads: 2
+  num_layers: 1
+
+checkpointing:
+  checkpoint_dir: checkpoints
+  save_interval_steps: 0
+  max_to_keep: 1
+  keep_period: null
+  resume_from: null
+
+logging:
+  log_every: 1
+  tensorboard_logdir: runs_tb
+  tensorboard_run_name: ppo_jaxpallet
+
+evaluations:
+  default_eval:
+    env_name: jaxpallet:PMC-PLD
+    env_kwargs:
+      max_items: 100
+    eval_every: 1
+    num_episodes: 160
+    max_steps_per_episode: 30
+    greedy: true

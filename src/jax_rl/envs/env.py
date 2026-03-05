@@ -95,6 +95,10 @@ class RustpoolObsWrapper(Wrapper):
         state, timestep = self._env.step(state, action, env_params)
         return state, self._normalize_timestep(timestep)
 
+    def simulate_batch(self, state, state_ids, actions):
+        state, timestep = self._env.simulate_batch(state, state_ids, actions)
+        return state, self._normalize_timestep(timestep)
+
 @register_env("rustpool")
 def _make_rustpool_env(env_name: str, num_envs_per_device: int, env_kwargs: dict[str, Any]):
     task_id = env_name.split(":", 1)[1]

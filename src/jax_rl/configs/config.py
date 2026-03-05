@@ -14,12 +14,13 @@ class EnvConfig:
 
 @dataclass
 class SystemConfig:
+    name: str = "ppo"
     total_timesteps: int = 100_000
     platform: str | None = None
     cuda_visible_devices: str | None = None
 
     num_envs: int = 16
-    num_steps: int = 128
+    num_steps: int = 25
 
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
@@ -33,6 +34,21 @@ class SystemConfig:
     update_epochs: int = 4
     minibatch_size: int = 256
     max_grad_norm: float = 0.5
+
+    num_simulations: int = 8
+    max_depth: int = 4
+    dirichlet_alpha: float = 0.3
+    dirichlet_fraction: float = 0.25
+    search_method: str = "muzero"
+    search_method_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    total_buffer_size: int = 16_384
+    total_batch_size: int = 1_024
+    sample_sequence_length: int = 1
+    period: int = 1
+    warmup_steps: int = 0
+    learner_updates_per_cycle: int = 1
+    tree_memory_budget_mb: int = 512
 
 
 @dataclass

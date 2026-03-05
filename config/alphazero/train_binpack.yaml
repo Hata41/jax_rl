@@ -1,27 +1,20 @@
 defaults:
-  - base_config
+  - /base_config
   - _self_
 
 env:
-  # Choices:
-  # - rustpool:<task_id>   (example: rustpool:BinPack-v0)
-  # - jaxpallet:<preset>   (example: jaxpallet:PMC-PLD)
-  # - gymnax env id        (example: CartPole-v1)
   env_name: rustpool:BinPack-v0
   seed: 0
-  # Optional constructor kwargs forwarded to selected env backend.
-  # Example: {max_items: 50}
-  env_kwargs:
-    max_items: 20
+  env_kwargs: {}
 
 system:
-  total_timesteps: 2048000
-  # Choices: null (auto/default), "cpu", "cuda"
+  name: alphazero
+  total_timesteps: 2048
   platform: null
-  # Choices: null (all visible), "0", "1", "0,1", ...
   cuda_visible_devices: null
-  num_envs: 64
-  num_steps: 32
+  num_envs: 8
+  num_steps: 25
+
   actor_lr: 0.0003
   critic_lr: 0.0003
   gamma: 0.99
@@ -33,11 +26,25 @@ system:
   minibatch_size: 64
   max_grad_norm: 0.5
 
+  num_simulations: 6
+  max_depth: 4
+  dirichlet_alpha: 0.3
+  dirichlet_fraction: 0.25
+  search_method: muzero
+
+  total_buffer_size: 512
+  total_batch_size: 1024
+  sample_sequence_length: 1
+  period: 1
+  warmup_steps: 25
+  learner_updates_per_cycle: 1
+  tree_memory_budget_mb: 124
+
 network:
   _delete_: true
   _target_: jax_rl.networks.BinPackPolicyValueModel
-  hidden_dim: 16
-  num_heads: 1
+  hidden_dim: 32
+  num_heads: 2
   num_layers: 1
 
 checkpointing:
@@ -50,23 +57,25 @@ checkpointing:
 logging:
   log_every: 1
   tensorboard_logdir: runs_tb
-  tensorboard_run_name: rustpool_binpack
+  tensorboard_run_name: alphazero_binpack
 
 evaluations:
-  default_eval:
+  policy_eval:
+    action_selection: policy
     env_name: rustpool:BinPack-v0
     env_kwargs:
       max_items: 20
     eval_every: 1
-    num_episodes: 160
+    num_episodes: 32
     max_steps_per_episode: 20
     greedy: true
 
-  second_eval:
+  search_eval:
+    action_selection: search
     env_name: rustpool:BinPack-v0
     env_kwargs:
-      max_items: 30
+      max_items: 20
     eval_every: 1
-    num_episodes: 160
-    max_steps_per_episode: 30
+    num_episodes: 32
+    max_steps_per_episode: 20
     greedy: true

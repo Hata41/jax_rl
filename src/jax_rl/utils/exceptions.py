@@ -19,3 +19,15 @@ class EnvironmentNotFoundError(JaxRLError, ValueError):
 
 class CheckpointRestoreError(JaxRLError, FileNotFoundError):
     """Raised when restoring checkpoints fails due to missing/invalid checkpoint data."""
+
+
+class EnvironmentInterfaceError(JaxRLError, TypeError):
+    """Raised when an environment is missing required methods for a selected backend path."""
+
+
+class NumericalInstabilityError(JaxRLError, FloatingPointError):
+    """Raised when NaN/Inf values are detected in critical search or training tensors."""
+
+
+class SearchTreeCapacityError(JaxRLError, MemoryError):
+    """Raised when configured MCTS limits are likely to exceed available memory budget."""
