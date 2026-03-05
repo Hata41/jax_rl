@@ -330,7 +330,7 @@ class BinPackPolicyValueModel(nnx.Module):
         rngs: nnx.Rngs,
     ):
         self.action_dim = int(action_dim)
-        self.torso = BinPackTorso(
+        self.shared_torso = BinPackTorso(
             hidden_dim=hidden_dim,
             num_heads=num_heads,
             num_layers=num_layers,
@@ -338,13 +338,13 @@ class BinPackPolicyValueModel(nnx.Module):
             item_feature_dim=item_feature_dim,
             rngs=rngs,
         )
-        self.item_actor_proj = _linear(hidden_dim, hidden_dim, scale=0.01, rngs=rngs)
+        self.actor_proj = _linear(hidden_dim, hidden_dim, scale=0.01, rngs=rngs)
         self.critic_head = _linear(hidden_dim * 2, 1, scale=1.0, rngs=rngs)
 
     def __call__(self, obs: dict):
-        ems_embeddings, item_embeddings, ems_mask, item_mask = self.torso(obs)
+        ems_embeddings, item_embeddings, ems_mask, item_mask = self.shared_torso(obs)
 
-        items_projected = self.item_actor_proj(item_embeddings)
+        items_projected = self.actor_proj(item_embeddings)
         score_grid = jnp.matmul(ems_embeddings, jnp.transpose(items_projected, (0, 2, 1)))
         action_mask = jnp.asarray(obs["action_mask"], dtype=jnp.bool_)
         logits = _flatten_binpack_logits(score_grid, action_mask)
@@ -364,10 +364,15 @@ class PolicyValueModel(nnx.Module):
         action_dims: int | Sequence[int],
         hidden_sizes: Sequence[int],
         rngs: nnx.Rngs,
+        shared_torso: bool = False,
     ):
         torso_out_dim = _torso_out_dim(obs_dim, hidden_sizes)
-        self.actor_torso = Torso(obs_dim, hidden_sizes, rngs=rngs)
-        self.critic_torso = Torso(obs_dim, hidden_sizes, rngs=rngs)
+        self.use_shared_torso = bool(shared_torso)
+        if self.use_shared_torso:
+            self.shared_torso = Torso(obs_dim, hidden_sizes, rngs=rngs)
+        else:
+            self.actor_torso = Torso(obs_dim, hidden_sizes, rngs=rngs)
+            self.critic_torso = Torso(obs_dim, hidden_sizes, rngs=rngs)
         self.actor_head = ActorHead(torso_out_dim, action_dims, rngs=rngs)
         self.critic_head = _linear(
             in_dim=torso_out_dim,
@@ -379,7 +384,14 @@ class PolicyValueModel(nnx.Module):
     def __call__(self, obs: dict | Array):
         obs_features, action_mask = flatten_observation_features(obs)
 
-        actor_features = self.actor_torso(obs_features)
+        if self.use_shared_torso:
+            shared_features = self.shared_torso(obs_features)
+            actor_features = shared_features
+            critic_features = shared_features
+        else:
+            actor_features = self.actor_torso(obs_features)
+            critic_features = self.critic_torso(obs_features)
+
         logits = self.actor_head(actor_features)
         if action_mask is not None and not isinstance(logits, tuple):
             valid_mask = action_mask
@@ -389,7 +401,6 @@ class PolicyValueModel(nnx.Module):
             safe_mask = jnp.where(has_any_valid, valid_mask, jnp.ones_like(valid_mask, dtype=jnp.bool_))
             logits = jnp.where(safe_mask, logits, jnp.asarray(-1e9, dtype=logits.dtype))
 
-        critic_features = self.critic_torso(obs_features)
         values = self.critic_head(critic_features).squeeze(-1)
         return logits, values
 

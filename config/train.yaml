@@ -43,5 +43,10 @@ resume_from: null
 tensorboard_logdir: null
 tensorboard_run_name: minimal
 
-eval_every: 1
-eval_episodes: 0
+evaluations:
+  default_eval:
+    env_name: CartPole-v1
+    eval_every: 1
+    num_episodes: 0
+    max_steps_per_episode: 1000
+    greedy: true

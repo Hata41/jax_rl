@@ -5,12 +5,12 @@ import jax.numpy as jnp
 import pytest
 
 from jax_rl.configs.config import PPOConfig
-from jax_rl.systems.ppo.eval import evaluate
+from jax_rl.systems.ppo.eval import Evaluator, evaluate
 from jax_rl.systems.ppo.update import make_actor_optimizer, make_critic_optimizer
 from jax_rl.utils.checkpoint import Checkpointer
-from jax_rl.utils.exceptions import CheckpointRestoreError
+from jax_rl.utils.exceptions import CheckpointRestoreError, ConfigDivisibilityError
 from jax_rl.networks import init_policy_value_params
-from jax_rl.utils.types import TrainState
+from jax_rl.utils.types import PolicyValueParams, TrainState
 
 
 def test_checkpoint_roundtrip(tmp_path: Path):
@@ -92,7 +92,7 @@ def test_max_to_keep(tmp_path: Path):
     assert checkpointer.all_steps() == (3, 4)
 
 
-def test_evaluate_returns_expected_keys():
+def test_evaluate_compiled_scan():
     config = PPOConfig(seed=1)
     params = init_policy_value_params(
         jax.random.PRNGKey(1),
@@ -100,11 +100,60 @@ def test_evaluate_returns_expected_keys():
         obs_dim=4,
         action_dims=2,
     )
-    metrics = evaluate(params, config, num_episodes=2, max_steps_per_episode=16)
+    metrics = evaluate(
+        params,
+        env_name="CartPole-v1",
+        seed=config.seed,
+        num_episodes=2,
+        max_steps_per_episode=16,
+        greedy=True,
+    )
 
     for key in ["return_mean", "return_std", "return_min", "return_max", "episodes"]:
         assert key in metrics
     assert metrics["episodes"] == 2
+
+
+def test_evaluator_initialization_divisibility(monkeypatch):
+    monkeypatch.setattr(jax, "local_device_count", lambda: 4)
+
+    with pytest.raises(ConfigDivisibilityError):
+        Evaluator(
+            env_name="CartPole-v1",
+            num_episodes=6,
+            max_steps_per_episode=16,
+            greedy=True,
+        )
+
+
+def test_evaluator_run_and_close():
+    num_devices = jax.local_device_count()
+    params = init_policy_value_params(
+        jax.random.PRNGKey(3),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
+        obs_dim=4,
+        action_dims=2,
+    )
+    replicated_params = PolicyValueParams(
+        graphdef=params.graphdef,
+        state=jax.tree_util.tree_map(
+            lambda x: jnp.broadcast_to(x, (num_devices,) + x.shape),
+            params.state,
+        ),
+    )
+
+    evaluator = Evaluator(
+        env_name="CartPole-v1",
+        num_episodes=num_devices,
+        max_steps_per_episode=16,
+        greedy=True,
+    )
+    metrics = evaluator.run(replicated_params=replicated_params, seed=7)
+
+    assert "return_mean" in metrics
+    assert "episodes" in metrics
+    assert metrics["episodes"] == num_devices
+    evaluator.close()
 
 
 def test_restore_nonexistent_explicit_path_raises_checkpoint_restore_error(tmp_path: Path):

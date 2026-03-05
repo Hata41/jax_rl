@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import importlib
 import pytest
 from stoa import AutoResetWrapper
 from stoa.core_wrappers.vmap import VmapWrapper
@@ -138,7 +139,7 @@ def test_train_pipeline_dry_run():
             "num_heads": 2,
             "num_layers": 1,
         },
-        eval_episodes=0,
+        evaluations={},
         log_every=1,
         save_interval_steps=0,
         tensorboard_logdir=None,
@@ -147,3 +148,61 @@ def test_train_pipeline_dry_run():
     result = train(config)
     assert isinstance(result, dict)
     assert "metrics" in result
+
+
+def test_train_pipeline_evaluators_closed(monkeypatch):
+    train_module = importlib.import_module("jax_rl.systems.ppo.anakin.system")
+    counters = {"init": 0, "run": 0, "close": 0}
+
+    class _FakeEvaluator:
+        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy):
+            del env_name, max_steps_per_episode, greedy
+            self.num_episodes = int(num_episodes)
+            counters["init"] += 1
+
+        def run(self, replicated_params, seed):
+            del replicated_params, seed
+            counters["run"] += 1
+            return {
+                "return_mean": 1.0,
+                "return_std": 0.0,
+                "return_min": 1.0,
+                "return_max": 1.0,
+                "episodes": self.num_episodes,
+                "steps": 1,
+            }
+
+        def close(self):
+            counters["close"] += 1
+
+    monkeypatch.setattr(train_module, "Evaluator", _FakeEvaluator)
+
+    num_envs = jax.local_device_count()
+    config = PPOConfig(
+        env_name="CartPole-v1",
+        total_timesteps=num_envs * 8,
+        num_envs=num_envs,
+        num_steps=8,
+        update_epochs=1,
+        minibatch_size=num_envs * 8,
+        evaluations={
+            "eval_1": {
+                "env_name": "CartPole-v1",
+                "eval_every": 1,
+                "num_episodes": num_envs,
+            },
+            "eval_2": {
+                "env_name": "CartPole-v1",
+                "eval_every": 1,
+                "num_episodes": num_envs,
+            },
+        },
+        save_interval_steps=0,
+        tensorboard_logdir=None,
+    )
+
+    train(config)
+
+    assert counters["init"] == 2
+    assert counters["close"] == 2
+    assert counters["run"] >= 2

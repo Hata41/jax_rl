@@ -47,7 +47,7 @@ The training entry point is in `src/jax_rl/cli.py`:
 1. Load `config/train.yaml` via Hydra.
 2. Apply command-line overrides (for example `actor_lr=0.001`).
 3. Convert the composed config to a typed `PPOConfig` object.
-4. Execute `train(config)` and optionally post-train `evaluate(...)`.
+4. Execute `train(config)` and optionally run one or more named eval profiles from `config.evaluations`.
 
 #### Runtime Defaults
 
@@ -64,6 +64,14 @@ Notable computed properties:
 - `local_device_count = jax.local_device_count()`
 
 Network creation is Hydra-driven through `network._target_`, with runtime dimensions injected at construction.
+
+Evaluation scheduling is defined by `evaluations: dict[str, dict[str, Any]]`, where each profile can set:
+
+- `env_name` (optional, defaults to training `env_name`)
+- `eval_every` (optional, defaults to `10`)
+- `num_episodes` (optional, defaults to `10`)
+- `max_steps_per_episode` (optional, defaults to `1000`)
+- `greedy` (optional, defaults to `true`)
 
 ### 5) Core Data Model
 
@@ -130,9 +138,12 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 `src/jax_rl/systems/ppo/eval.py`
 
-- Creates single-env evaluation environment.
-- Runs deterministic policy mode action selection.
-- Aggregates episode return statistics.
+- Provides a stateful `Evaluator` class that instantiates the evaluation environment once and reuses a compiled `pmap` graph across evaluation calls.
+- Runs reset and step inside `pmap(axis_name="device")` to support both pure-JAX backends and `rustpool`'s device-indexed callback routing.
+- Executes episode rollout with `jax.lax.scan` and an active-mask to avoid reward inflation after terminal steps under auto-reset wrappers.
+- Exposes `run(replicated_params, seed)` for fast in-loop evaluation and `close()` for explicit native resource/thread cleanup.
+- Keeps a compatibility `evaluate(...)` wrapper for one-shot evaluation from scripts/CLI.
+- Aggregates episode return statistics (`mean/std/min/max`, `episodes`, `steps`).
 
 #### Checkpointing
 
@@ -236,7 +247,7 @@ High-level flow in `src/jax_rl/systems/ppo/anakin/system.py`:
 8. For each update:
   - `pmap` rollout step (`collect_rollout`)
   - `pmap` PPO update (`ppo_update`)
-  - optional eval
+  - optional multi-profile eval dispatch from `config.evaluations`
   - structured logging
   - periodic checkpoint save
 9. Return final run summary and model params.
@@ -348,7 +359,7 @@ uv run jax-rl-train network.hidden_dim=128
 # resume_from: checkpoints
 # tensorboard_logdir: runs
 # tensorboard_run_name: cartpole_baseline
-# eval_episodes: 10
+# evaluations.default_eval.num_episodes: 10
 
 # in another terminal
 tensorboard --logdir runs
@@ -409,7 +420,24 @@ Current repository defaults are:
 For a local Gymnax smoke run, override the environment at launch time:
 
 ```bash
-uv run jax-rl-train env_name=CartPole-v1 total_timesteps=2048 eval_episodes=0
+uv run jax-rl-train env_name=CartPole-v1 total_timesteps=2048 evaluations.default_eval.num_episodes=0
+```
+
+Example evaluation profiles block:
+
+```yaml
+evaluations:
+  greedy_cartpole:
+    env_name: CartPole-v1
+    eval_every: 1
+    num_episodes: 5
+    max_steps_per_episode: 500
+    greedy: true
+  stochastic_cartpole:
+    env_name: CartPole-v1
+    eval_every: 5
+    num_episodes: 5
+    greedy: false
 ```
 
 ### 4) Environment-specific examples

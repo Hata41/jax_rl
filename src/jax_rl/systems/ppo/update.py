@@ -22,14 +22,32 @@ def _path_token(entry) -> str:
     return str(entry)
 
 
-def _matches_module_prefix(path, module_prefix: str) -> bool:
-    return any(_path_token(entry).startswith(module_prefix) for entry in path)
+def _matches_module_prefix(path, module_prefixes: tuple[str, ...]) -> bool:
+    return any(
+        _path_token(entry).startswith(module_prefix)
+        for entry in path
+        for module_prefix in module_prefixes
+    )
 
 
-def _zero_out_except_module(tree, module_prefix: str):
+def _zero_out_except_module(tree, module_prefixes: tuple[str, ...]):
+    known_prefixes = ("actor_", "critic_", "shared_")
+
+    def _validate_prefixes(path, leaf):
+        del leaf
+        if not _matches_module_prefix(path, known_prefixes):
+            path_tokens = "/".join(_path_token(entry) for entry in path)
+            raise ValueError(
+                "Unrecognized parameter prefix encountered during gradient filtering: "
+                f"{path_tokens}. Expected one of {known_prefixes}."
+            )
+        return None
+
+    jax.tree_util.tree_map_with_path(_validate_prefixes, tree)
+
     return jax.tree_util.tree_map_with_path(
         lambda path, leaf: leaf
-        if _matches_module_prefix(path, module_prefix)
+        if _matches_module_prefix(path, module_prefixes)
         else jnp.zeros_like(leaf),
         tree,
     )
@@ -136,8 +154,14 @@ def ppo_update(
                 curr_state.params.state
             )
             grads = jax.lax.pmean(grads, axis_name="device")
-            actor_grads = _zero_out_except_module(grads, module_prefix="actor_")
-            critic_grads = _zero_out_except_module(grads, module_prefix="critic_")
+            actor_grads = _zero_out_except_module(
+                grads,
+                module_prefixes=("actor_", "shared_"),
+            )
+            critic_grads = _zero_out_except_module(
+                grads,
+                module_prefixes=("critic_",),
+            )
             actor_updates, next_actor_opt_state = actor_optimizer.update(
                 actor_grads,
                 curr_state.actor_opt_state,

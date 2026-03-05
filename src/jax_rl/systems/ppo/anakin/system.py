@@ -13,7 +13,7 @@ from ....utils.exceptions import ConfigDivisibilityError
 from ....utils.logging import extract_completed_episode_metrics, jaxRL_Logger
 from ....utils.shapes import space_feature_dim, space_flat_dim
 from ....utils.types import LogEvent, RunnerState, TrainState
-from ..eval import evaluate
+from ..eval import Evaluator
 from ..update import make_actor_optimizer, make_critic_optimizer
 from .steps import make_ppo_steps
 
@@ -48,6 +48,10 @@ def _extract_learning_rate(actor_opt_state) -> float:
         elif isinstance(current, (tuple, list)):
             stack.extend(current)
     return float("nan")
+
+
+def _prefixed_metrics(prefix: str, metrics: dict[str, float]) -> dict[str, float]:
+    return {f"{prefix}/{key}": value for key, value in metrics.items()}
 
 
 def build_system(config: PPOConfig):
@@ -217,91 +221,115 @@ def train(config: PPOConfig):
             "params": _unreplicate(runner_state.train_state.params),
         }
 
-    for local_update_idx in range(remaining_updates):
-        global_update_idx = start_update + local_update_idx
-
-        rollout_start = time.time()
-        runner_state, rollout_outputs = pmap_rollout(runner_state)
-        jax.block_until_ready(runner_state.obs)
-        rollout_elapsed = time.time() - rollout_start
-        rollout_batch, last_values, rollout_infos, rollout_metrics = rollout_outputs
-        rollout_metrics = _unreplicate(rollout_metrics)
-        rollout_infos = _unreplicate(rollout_infos)
-
-        act_metrics = dict(rollout_metrics)
-        act_metrics["steps_per_second"] = _safe_steps_per_second(
-            num_devices * num_envs_per_device * config.num_steps,
-            rollout_elapsed,
+    evaluators: dict[str, Evaluator] = {}
+    eval_every_by_name: dict[str, int] = {}
+    for eval_name, eval_cfg in (config.evaluations or {}).items():
+        eval_cfg = dict(eval_cfg)
+        num_episodes = int(eval_cfg.get("num_episodes", 10))
+        if num_episodes <= 0:
+            continue
+        evaluators[eval_name] = Evaluator(
+            env_name=str(eval_cfg.get("env_name", config.env_name)),
+            num_episodes=num_episodes,
+            max_steps_per_episode=int(eval_cfg.get("max_steps_per_episode", 1_000)),
+            greedy=bool(eval_cfg.get("greedy", True)),
         )
-        act_metrics.update(extract_completed_episode_metrics(rollout_infos))
+        eval_every_by_name[eval_name] = int(eval_cfg.get("eval_every", 10))
 
-        update_start = time.time()
-        runner_state, train_metrics = pmap_update(runner_state, rollout_batch, last_values)
-        jax.block_until_ready(runner_state.obs)
-        update_elapsed = time.time() - update_start
-        train_metrics = _unreplicate(train_metrics)
+    try:
+        for local_update_idx in range(remaining_updates):
+            global_update_idx = start_update + local_update_idx
 
-        train_metrics = dict(train_metrics)
-        train_metrics["steps_per_second"] = _safe_steps_per_second(
-            config.update_epochs * num_minibatches,
-            update_elapsed,
-        )
-        actor_opt_state = _unreplicate(runner_state.train_state.actor_opt_state)
-        train_metrics["learning_rate"] = _extract_learning_rate(actor_opt_state)
+            rollout_start = time.time()
+            runner_state, rollout_outputs = pmap_rollout(runner_state)
+            jax.block_until_ready(runner_state.obs)
+            rollout_elapsed = time.time() - rollout_start
+            rollout_batch, last_values, rollout_infos, rollout_metrics = rollout_outputs
+            rollout_metrics = _unreplicate(rollout_metrics)
+            rollout_infos = _unreplicate(rollout_infos)
 
-        log_step = (global_update_idx + 1) * config.rollout_batch_size
-        misc_metrics = {"timestep": float(log_step)}
-
-        eval_metrics = {}
-        if (
-            config.eval_episodes > 0
-            and config.eval_every > 0
-            and global_update_idx % config.eval_every == 0
-        ):
-            eval_start = time.time()
-            eval_results = evaluate(
-                _unreplicate(runner_state.train_state.params),
-                config,
-                num_episodes=config.eval_episodes,
+            act_metrics = dict(rollout_metrics)
+            act_metrics["steps_per_second"] = _safe_steps_per_second(
+                num_devices * num_envs_per_device * config.num_steps,
+                rollout_elapsed,
             )
-            eval_elapsed = time.time() - eval_start
-            eval_metrics = dict(eval_results)
-            eval_metrics["steps_per_second"] = _safe_steps_per_second(
-                float(eval_results.get("steps", 0)),
-                eval_elapsed,
+            act_metrics.update(extract_completed_episode_metrics(rollout_infos))
+
+            update_start = time.time()
+            runner_state, train_metrics = pmap_update(runner_state, rollout_batch, last_values)
+            jax.block_until_ready(runner_state.obs)
+            update_elapsed = time.time() - update_start
+            train_metrics = _unreplicate(train_metrics)
+
+            train_metrics = dict(train_metrics)
+            train_metrics["steps_per_second"] = _safe_steps_per_second(
+                config.update_epochs * num_minibatches,
+                update_elapsed,
             )
+            actor_opt_state = _unreplicate(runner_state.train_state.actor_opt_state)
+            train_metrics["learning_rate"] = _extract_learning_rate(actor_opt_state)
 
-        logger.log(act_metrics, log_step, LogEvent.ACT)
-        logger.log(train_metrics, log_step, LogEvent.TRAIN)
-        logger.log(misc_metrics, log_step, LogEvent.ABSOLUTE)
-        if eval_metrics:
-            logger.log(eval_metrics, log_step, LogEvent.EVAL)
+            log_step = (global_update_idx + 1) * config.rollout_batch_size
+            misc_metrics = {"timestep": float(log_step)}
 
-        merged_metrics = {}
-        merged_metrics.update(logger.materialize(act_metrics, LogEvent.ACT))
-        merged_metrics.update(logger.materialize(train_metrics, LogEvent.TRAIN))
-        merged_metrics.update(logger.materialize(misc_metrics, LogEvent.ABSOLUTE))
-        if eval_metrics:
-            merged_metrics.update(logger.materialize(eval_metrics, LogEvent.EVAL))
-        latest_metrics = merged_metrics
+            eval_metrics = {}
+            for eval_name, evaluator in evaluators.items():
+                eval_every = eval_every_by_name.get(eval_name, 10)
+                if eval_every <= 0 or global_update_idx % eval_every != 0:
+                    continue
 
-        if config.save_interval_steps > 0 and (
-            (global_update_idx + 1) % config.save_interval_steps == 0
-            or local_update_idx == remaining_updates - 1
-        ):
-            train_state_to_save = _unreplicate(runner_state.train_state)
-            key_to_save = _unreplicate(runner_state.key)
-            eval_metric = float(eval_metrics.get("return_mean", float("-inf")))
-            checkpointer.save(
-                timestep=global_update_idx + 1,
-                train_state=train_state_to_save,
-                key=key_to_save,
-                metric=eval_metric,
-            )
-            latest_checkpoint = checkpointer.checkpoint_path_for_step(global_update_idx + 1)
+                eval_start = time.time()
+                eval_results = evaluator.run(
+                    replicated_params=runner_state.train_state.params,
+                    seed=int(config.seed + global_update_idx),
+                )
+                eval_elapsed = time.time() - eval_start
 
-    logger.flush()
-    logger.close()
+                prefixed = _prefixed_metrics(eval_name, dict(eval_results))
+                prefixed[f"{eval_name}/steps_per_second"] = _safe_steps_per_second(
+                    float(eval_results.get("steps", 0)),
+                    eval_elapsed,
+                )
+                eval_metrics.update(prefixed)
+
+            logger.log(act_metrics, log_step, LogEvent.ACT)
+            logger.log(train_metrics, log_step, LogEvent.TRAIN)
+            logger.log(misc_metrics, log_step, LogEvent.ABSOLUTE)
+            if eval_metrics:
+                logger.log(eval_metrics, log_step, LogEvent.EVAL)
+
+            merged_metrics = {}
+            merged_metrics.update(logger.materialize(act_metrics, LogEvent.ACT))
+            merged_metrics.update(logger.materialize(train_metrics, LogEvent.TRAIN))
+            merged_metrics.update(logger.materialize(misc_metrics, LogEvent.ABSOLUTE))
+            if eval_metrics:
+                merged_metrics.update(logger.materialize(eval_metrics, LogEvent.EVAL))
+            latest_metrics = merged_metrics
+
+            if config.save_interval_steps > 0 and (
+                (global_update_idx + 1) % config.save_interval_steps == 0
+                or local_update_idx == remaining_updates - 1
+            ):
+                train_state_to_save = _unreplicate(runner_state.train_state)
+                key_to_save = _unreplicate(runner_state.key)
+                eval_return_values = [
+                    float(value)
+                    for key, value in eval_metrics.items()
+                    if key.endswith("/return_mean")
+                ]
+                eval_metric = max(eval_return_values) if eval_return_values else float("-inf")
+                checkpointer.save(
+                    timestep=global_update_idx + 1,
+                    train_state=train_state_to_save,
+                    key=key_to_save,
+                    metric=eval_metric,
+                )
+                latest_checkpoint = checkpointer.checkpoint_path_for_step(global_update_idx + 1)
+    finally:
+        for evaluator in evaluators.values():
+            evaluator.close()
+        logger.flush()
+        logger.close()
 
     return {
         "num_updates": config.num_updates,

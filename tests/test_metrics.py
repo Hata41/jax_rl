@@ -24,8 +24,7 @@ def _tiny_config(**overrides):
         hidden_size=16,
         hidden_layers=1,
         log_every=1,
-        eval_every=1,
-        eval_episodes=0,
+        evaluations={},
     )
     return PPOConfig(**{**config.__dict__, **overrides})
 
@@ -33,7 +32,7 @@ def _tiny_config(**overrides):
 def test_sps_calculation_validity(monkeypatch):
     train_module = importlib.import_module("jax_rl.systems.ppo.anakin.system")
 
-    config = _tiny_config(eval_episodes=0)
+    config = _tiny_config()
     captured = []
 
     class _CaptureLogger:
@@ -106,7 +105,7 @@ def test_episode_masking_uses_completed_only():
 
 
 def test_train_console_output_excludes_reward_mean(capsys):
-    config = _tiny_config(eval_episodes=0)
+    config = _tiny_config()
 
     train(config)
 
@@ -117,7 +116,17 @@ def test_train_console_output_excludes_reward_mean(capsys):
 def test_metric_prefix_enforcement_with_eval(monkeypatch):
     train_module = importlib.import_module("jax_rl.systems.ppo.anakin.system")
 
-    config = _tiny_config(eval_episodes=1, eval_every=1)
+    config = _tiny_config(
+        evaluations={
+            "eval_1": {
+                "env_name": "CartPole-v1",
+                "eval_every": 1,
+                "num_episodes": 1,
+                "max_steps_per_episode": 16,
+                "greedy": True,
+            }
+        }
+    )
     captured = []
 
     class _CaptureLogger:
@@ -140,22 +149,31 @@ def test_metric_prefix_enforcement_with_eval(monkeypatch):
         def close(self):
             return
 
-    def fake_evaluate(_params, _config, num_episodes, max_steps_per_episode=1_000):
-        return {
-            "return_mean": 1.0,
-            "return_std": 0.0,
-            "return_min": 1.0,
-            "return_max": 1.0,
-            "episodes": int(num_episodes),
-            "steps": 10,
-        }
+    class _FakeEvaluator:
+        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy):
+            del env_name, max_steps_per_episode, greedy
+            self.num_episodes = int(num_episodes)
+
+        def run(self, replicated_params, seed):
+            del replicated_params, seed
+            return {
+                "return_mean": 1.0,
+                "return_std": 0.0,
+                "return_min": 1.0,
+                "return_max": 1.0,
+                "episodes": int(self.num_episodes),
+                "steps": 10,
+            }
+
+        def close(self):
+            return
 
     monkeypatch.setattr(
         train_module.jaxRL_Logger,
         "from_config",
         staticmethod(lambda _config: _CaptureLogger()),
     )
-    monkeypatch.setattr(train_module, "evaluate", fake_evaluate)
+    monkeypatch.setattr(train_module, "Evaluator", _FakeEvaluator)
 
     train(config)
 
@@ -165,3 +183,81 @@ def test_metric_prefix_enforcement_with_eval(monkeypatch):
     assert LogEvent.TRAIN in observed_events
     assert LogEvent.EVAL in observed_events
     assert LogEvent.ABSOLUTE in observed_events
+
+
+def test_multiple_evaluations_logging(monkeypatch):
+    train_module = importlib.import_module("jax_rl.systems.ppo.anakin.system")
+
+    config = _tiny_config(
+        evaluations={
+            "eval_1": {
+                "env_name": "CartPole-v1",
+                "eval_every": 1,
+                "num_episodes": 1,
+            },
+            "eval_2": {
+                "env_name": "CartPole-v1",
+                "eval_every": 1,
+                "num_episodes": 1,
+                "greedy": False,
+            },
+        }
+    )
+    captured = []
+
+    class _CaptureLogger:
+        def __init__(self):
+            self.sinks = []
+
+        def log_config(self, _config):
+            return
+
+        def materialize(self, metrics, event):
+            prefix = "" if event is LogEvent.ABSOLUTE else f"{event.value}/"
+            return {f"{prefix}{k}": float(np.asarray(v)) for k, v in metrics.items()}
+
+        def log(self, metrics, step, event):
+            captured.append((event, step, dict(metrics)))
+
+        def flush(self):
+            return
+
+        def close(self):
+            return
+
+    class _FakeEvaluator:
+        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy):
+            del env_name, max_steps_per_episode, greedy
+            self.num_episodes = int(num_episodes)
+
+        def run(self, replicated_params, seed):
+            del replicated_params, seed
+            return {
+                "return_mean": float(self.num_episodes),
+                "return_std": 0.0,
+                "return_min": 1.0,
+                "return_max": 1.0,
+                "episodes": int(self.num_episodes),
+                "steps": 10,
+            }
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(
+        train_module.jaxRL_Logger,
+        "from_config",
+        staticmethod(lambda _config: _CaptureLogger()),
+    )
+    monkeypatch.setattr(train_module, "Evaluator", _FakeEvaluator)
+
+    train(config)
+
+    eval_payloads = [metrics for event, _, metrics in captured if event is LogEvent.EVAL]
+    assert eval_payloads
+    merged_eval_metrics = {}
+    for payload in eval_payloads:
+        merged_eval_metrics.update(payload)
+
+    assert "eval_1/return_mean" in merged_eval_metrics
+    assert "eval_2/return_mean" in merged_eval_metrics

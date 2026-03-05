@@ -4,7 +4,11 @@ import optax
 
 from jax_rl.configs.config import PPOConfig
 from jax_rl.networks import init_policy_value_params
-from jax_rl.systems.ppo.update import make_actor_optimizer, make_critic_optimizer
+from jax_rl.systems.ppo.update import (
+    _zero_out_except_module,
+    make_actor_optimizer,
+    make_critic_optimizer,
+)
 
 
 def _allclose_tree(tree_a, tree_b):
@@ -81,3 +85,21 @@ def test_actor_learning_rate_schedule_reaches_zero_at_total_opt_steps():
 
     current_lr = opt_state[1].hyperparams["learning_rate"]
     assert float(current_lr) == 0.0
+
+
+def test_gradient_routing_shared_torso():
+    grads = {
+        "actor_head": {"kernel": jnp.asarray([1.0, 2.0], dtype=jnp.float32)},
+        "critic_head": {"kernel": jnp.asarray([3.0, 4.0], dtype=jnp.float32)},
+        "shared_torso": {"kernel": jnp.asarray([5.0, 6.0], dtype=jnp.float32)},
+    }
+
+    actor_grads = _zero_out_except_module(grads, module_prefixes=("actor_", "shared_"))
+    assert jnp.all(actor_grads["actor_head"]["kernel"] == grads["actor_head"]["kernel"])
+    assert jnp.all(actor_grads["shared_torso"]["kernel"] == grads["shared_torso"]["kernel"])
+    assert jnp.all(actor_grads["critic_head"]["kernel"] == 0.0)
+
+    critic_grads = _zero_out_except_module(grads, module_prefixes=("critic_",))
+    assert jnp.all(critic_grads["critic_head"]["kernel"] == grads["critic_head"]["kernel"])
+    assert jnp.all(critic_grads["actor_head"]["kernel"] == 0.0)
+    assert jnp.all(critic_grads["shared_torso"]["kernel"] == 0.0)

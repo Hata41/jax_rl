@@ -37,8 +37,7 @@ class PPOConfig:
     )
 
     log_every: int = 10
-    eval_every: int = 10
-    eval_episodes: int = 0
+    evaluations: dict[str, dict[str, Any]] = field(default_factory=dict)
     checkpoint_dir: str = "checkpoints"
     save_interval_steps: int = 0
     max_to_keep: int = 1

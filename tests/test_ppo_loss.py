@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from jax_rl.systems.ppo.losses import ppo_loss
+from jax_rl.systems.ppo.losses import compute_actor_loss, compute_critic_loss, ppo_loss
 from jax_rl.networks import init_policy_value_params, policy_value_apply
 from jax_rl.utils.types import FlattenBatch
 
@@ -115,3 +115,52 @@ def test_ppo_loss_extreme_log_ratio_stays_finite():
     assert jnp.isfinite(loss)
     for value in metrics.values():
         assert jnp.isfinite(value)
+
+
+def test_ppo_loss_modular_math():
+    key = jax.random.PRNGKey(21)
+    params = init_policy_value_params(
+        key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
+        obs_dim=4,
+        action_dims=2,
+    )
+
+    obs = jax.random.normal(jax.random.PRNGKey(22), (32, 4))
+    dist, values = policy_value_apply(params.graphdef, params.state, obs)
+    actions = dist.sample(jax.random.PRNGKey(23))
+    old_log_probs = dist.log_prob(actions)
+
+    batch = FlattenBatch(
+        obs=obs,
+        actions=actions,
+        old_log_probs=old_log_probs,
+        old_values=values,
+        advantages=jnp.ones((32,), dtype=jnp.float32),
+        returns=values + 0.1,
+    )
+
+    actor_loss, _ = compute_actor_loss(
+        dist=dist,
+        batch=batch,
+        clip_epsilon=0.2,
+        entropy_coef=0.01,
+    )
+    critic_loss, _ = compute_critic_loss(
+        new_values=values,
+        batch=batch,
+        clip_epsilon=0.2,
+        value_coef=0.5,
+    )
+    total_loss, metrics = ppo_loss(
+        params.graphdef,
+        params.state,
+        batch,
+        clip_epsilon=0.2,
+        value_coef=0.5,
+        entropy_coef=0.01,
+    )
+
+    assert jnp.allclose(total_loss, actor_loss + critic_loss)
+    for key_name in ("loss_policy", "loss_value", "entropy", "clip_fraction", "loss_total"):
+        assert key_name in metrics

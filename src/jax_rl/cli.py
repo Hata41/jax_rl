@@ -25,10 +25,25 @@ def main(cfg: DictConfig) -> None:
     output = train(config)
     if output.get("tensorboard_run_dir"):
         print(f"tensorboard_run_dir={output['tensorboard_run_dir']}")
-    if config.eval_episodes > 0:
-        eval_metrics = evaluate(output["params"], config, num_episodes=config.eval_episodes)
-        eval_str = " ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in sorted(eval_metrics.items()))
-        print(f"eval {eval_str}")
+    for eval_name, eval_cfg in (config.evaluations or {}).items():
+        eval_cfg = dict(eval_cfg)
+        num_episodes = int(eval_cfg.get("num_episodes", 10))
+        if num_episodes <= 0:
+            continue
+        env_name = str(eval_cfg.get("env_name", config.env_name))
+        eval_metrics = evaluate(
+            params=output["params"],
+            env_name=env_name,
+            seed=config.seed,
+            num_episodes=num_episodes,
+            max_steps_per_episode=int(eval_cfg.get("max_steps_per_episode", 1_000)),
+            greedy=bool(eval_cfg.get("greedy", True)),
+        )
+        eval_str = " ".join(
+            f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+            for k, v in sorted(eval_metrics.items())
+        )
+        print(f"eval[{eval_name}] {eval_str}")
 
 
 if __name__ == "__main__":

@@ -255,3 +255,35 @@ def test_missing_network_target_raises_value_error():
             obs_dim=4,
             action_dims=2,
         )
+
+
+def test_shared_torso_instantiation():
+    params = init_policy_value_params(
+        jax.random.PRNGKey(202),
+        network_config={
+            "_target_": "jax_rl.networks.PolicyValueModel",
+            "hidden_sizes": [16],
+            "shared_torso": True,
+        },
+        obs_dim=4,
+        action_dims=2,
+    )
+
+    found_shared = False
+    found_actor = False
+    found_critic = False
+
+    def _collector(path, leaf):
+        nonlocal found_shared, found_actor, found_critic
+        del leaf
+        tokens = [_path_token(entry) for entry in path]
+        found_shared = found_shared or any(token.startswith("shared_torso") for token in tokens)
+        found_actor = found_actor or any(token.startswith("actor_torso") for token in tokens)
+        found_critic = found_critic or any(token.startswith("critic_torso") for token in tokens)
+        return None
+
+    jax.tree_util.tree_map_with_path(_collector, params.state)
+
+    assert found_shared
+    assert not found_actor
+    assert not found_critic

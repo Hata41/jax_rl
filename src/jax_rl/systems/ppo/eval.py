@@ -1,52 +1,178 @@
 import jax
 import jax.numpy as jnp
 
-from ...configs.config import PPOConfig
 from ...envs.env import make_stoa_env
 from ...networks import policy_value_apply
+from ...utils.exceptions import ConfigDivisibilityError
 from ...utils.types import PolicyValueParams
+
+
+def _zero_metrics() -> dict[str, float | int]:
+    return {
+        "return_mean": 0.0,
+        "return_std": 0.0,
+        "return_min": 0.0,
+        "return_max": 0.0,
+        "episodes": 0,
+        "steps": 0,
+    }
+
+
+def _replicate_tree(tree, num_devices: int):
+    return jax.tree_util.tree_map(
+        lambda x: jnp.broadcast_to(jnp.asarray(x), (num_devices,) + jnp.asarray(x).shape),
+        tree,
+    )
+
+
+def _is_replicated_state(state, num_devices: int) -> bool:
+    leaves = jax.tree_util.tree_leaves(state)
+    if not leaves:
+        return False
+    return all(
+        hasattr(leaf, "shape") and len(leaf.shape) > 0 and int(leaf.shape[0]) == int(num_devices)
+        for leaf in leaves
+    )
+
+
+class Evaluator:
+    def __init__(
+        self,
+        env_name: str,
+        num_episodes: int,
+        max_steps_per_episode: int,
+        greedy: bool,
+    ):
+        self.env_name = str(env_name)
+        self.num_episodes = int(num_episodes)
+        self.max_steps_per_episode = int(max_steps_per_episode)
+        self.greedy = bool(greedy)
+        self.num_devices = int(jax.local_device_count())
+        self._closed = False
+
+        if self.num_episodes <= 0:
+            self.disabled = True
+            self.num_envs_per_device = 0
+            self.env = None
+            self.env_params = None
+            self._pmap_eval = None
+            return
+
+        self.disabled = False
+        if self.num_episodes % self.num_devices != 0:
+            raise ConfigDivisibilityError(
+                "num_episodes must be divisible by local device count, "
+                f"got num_episodes={self.num_episodes} and num_devices={self.num_devices}."
+            )
+
+        self.num_envs_per_device = self.num_episodes // self.num_devices
+        self.env, self.env_params = make_stoa_env(
+            self.env_name,
+            num_envs_per_device=self.num_envs_per_device,
+        )
+
+        def _device_eval(params: PolicyValueParams, device_key):
+            key, reset_key = jax.random.split(device_key)
+            env_state, timestep = self.env.reset(reset_key, self.env_params)
+            init_active_mask = jnp.ones((self.num_envs_per_device,), dtype=jnp.float32)
+
+            def _env_step(carry, _):
+                curr_env_state, curr_obs, curr_key, active_mask = carry
+                curr_key, action_key, next_key = jax.random.split(curr_key, 3)
+
+                dist, _ = policy_value_apply(params.graphdef, params.state, curr_obs)
+                action = jax.lax.cond(
+                    jnp.asarray(self.greedy),
+                    lambda _: dist.mode(),
+                    lambda sample_key: dist.sample(sample_key),
+                    action_key,
+                )
+
+                next_env_state, next_timestep = self.env.step(curr_env_state, action, self.env_params)
+                reward = jnp.asarray(next_timestep.reward, dtype=jnp.float32)
+                done = jnp.asarray(next_timestep.last(), dtype=jnp.float32)
+
+                masked_reward = reward * active_mask
+                next_active_mask = active_mask * (1.0 - done)
+
+                return (
+                    next_env_state,
+                    next_timestep.observation,
+                    next_key,
+                    next_active_mask,
+                ), {
+                    "reward": masked_reward,
+                    "active_mask": active_mask,
+                }
+
+            _, outputs = jax.lax.scan(
+                _env_step,
+                (env_state, timestep.observation, key, init_active_mask),
+                xs=None,
+                length=self.max_steps_per_episode,
+            )
+            returns = jnp.sum(outputs["reward"], axis=0)
+            steps = jnp.sum(outputs["active_mask"], axis=0)
+            return returns, steps
+
+        self._pmap_eval = jax.pmap(
+            _device_eval,
+            axis_name="device",
+            in_axes=(PolicyValueParams(graphdef=None, state=0), 0),
+        )
+
+    def run(self, replicated_params: PolicyValueParams, seed: int) -> dict[str, float | int]:
+        if self.disabled:
+            return _zero_metrics()
+
+        device_keys = jax.random.split(jax.random.PRNGKey(int(seed)), self.num_devices)
+        returns, steps = self._pmap_eval(replicated_params, device_keys)
+
+        flat_returns = jnp.reshape(returns, (self.num_episodes,))
+        total_steps = jnp.sum(steps)
+
+        return {
+            "return_mean": float(jnp.mean(flat_returns)),
+            "return_std": float(jnp.std(flat_returns)),
+            "return_min": float(jnp.min(flat_returns)),
+            "return_max": float(jnp.max(flat_returns)),
+            "episodes": int(self.num_episodes),
+            "steps": int(total_steps),
+        }
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self.env is not None and hasattr(self.env, "close"):
+            self.env.close()
 
 
 def evaluate(
     params: PolicyValueParams,
-    config: PPOConfig,
+    env_name: str,
+    seed: int,
     num_episodes: int = 10,
     max_steps_per_episode: int = 1_000,
+    greedy: bool = True,
 ):
-    env, env_params = make_stoa_env(config.env_name, num_envs_per_device=1)
-    key = jax.random.PRNGKey(config.seed)
+    evaluator = Evaluator(
+        env_name=env_name,
+        num_episodes=num_episodes,
+        max_steps_per_episode=max_steps_per_episode,
+        greedy=greedy,
+    )
+    try:
+        if evaluator.disabled:
+            return _zero_metrics()
 
-    episode_returns = []
-    total_steps = 0
-
-    for _ in range(num_episodes):
-        key, reset_key = jax.random.split(key)
-        env_state, timestep = env.reset(reset_key, env_params)
-        obs = timestep.observation
-
-        total_reward = 0.0
-        step_count = 0
-
-        while (not bool(jnp.asarray(timestep.last()).all())) and step_count < max_steps_per_episode:
-            dist, _ = policy_value_apply(params.graphdef, params.state, obs)
-            action = dist.mode()
-
-            key, step_key = jax.random.split(key)
-            del step_key
-            env_state, timestep = env.step(env_state, action, env_params)
-            obs = timestep.observation
-            total_reward += float(jnp.sum(jnp.asarray(timestep.reward, dtype=jnp.float32)))
-            step_count += 1
-
-        episode_returns.append(total_reward)
-        total_steps += step_count
-
-    returns = jnp.asarray(episode_returns, dtype=jnp.float32)
-    return {
-        "return_mean": float(jnp.mean(returns)),
-        "return_std": float(jnp.std(returns)),
-        "return_min": float(jnp.min(returns)),
-        "return_max": float(jnp.max(returns)),
-        "episodes": int(num_episodes),
-        "steps": int(total_steps),
-    }
+        if _is_replicated_state(params.state, evaluator.num_devices):
+            replicated_params = params
+        else:
+            replicated_params = PolicyValueParams(
+                graphdef=params.graphdef,
+                state=_replicate_tree(params.state, evaluator.num_devices),
+            )
+        return evaluator.run(replicated_params=replicated_params, seed=seed)
+    finally:
+        evaluator.close()
