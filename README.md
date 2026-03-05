@@ -51,11 +51,11 @@ The training entry point is in `src/jax_rl/cli.py`:
 
 #### Runtime Defaults
 
-`configure_jax_runtime_defaults` in `src/jax_rl/runtime.py` sets CPU runtime defaults when no explicit JAX platform env vars are present and no NVIDIA device is detected.
+`configure_jax_runtime_defaults` in `src/jax_rl/utils/runtime.py` sets CPU runtime defaults when no explicit JAX platform env vars are present and no NVIDIA device is detected.
 
 ### 4) Configuration Model
 
-Configuration is centralized in `src/jax_rl/config.py` via immutable `PPOConfig`.
+Configuration is centralized in `src/jax_rl/configs/config.py` via immutable `PPOConfig`.
 
 Notable computed properties:
 
@@ -67,7 +67,7 @@ Network creation is Hydra-driven through `network._target_`, with runtime dimens
 
 ### 5) Core Data Model
 
-Main typed runtime structures are in `src/jax_rl/types.py`:
+Main typed runtime structures are in `src/jax_rl/utils/types.py`:
 
 - `PolicyValueParams(graphdef, state)`
 - `TrainState(params, actor_opt_state, critic_opt_state)`
@@ -81,7 +81,7 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 #### Environment Construction
 
-`src/jax_rl/env.py`
+`src/jax_rl/envs/env.py`
 
 - Provides environment wrappers and normalization adapters.
 - Exposes `make_stoa_env(env_name: str, num_envs_per_device: int)`.
@@ -89,7 +89,7 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 #### Networks and Distributions
 
-`src/jax_rl/networks.py`
+`src/jax_rl/networks/networks.py`
 
 - Observation flattening and action-mask handling.
 - Policy/value model definitions (MLP and binpack transformer variants).
@@ -98,7 +98,7 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 #### Rollout Collection
 
-`src/jax_rl/rollout.py`
+`src/jax_rl/systems/ppo/rollout.py`
 
 - Uses `lax.scan` to collect trajectories.
 - Computes done/truncated flags and bootstrap values.
@@ -106,7 +106,7 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 #### PPO Update Step
 
-`src/jax_rl/update.py`
+`src/jax_rl/systems/ppo/update.py`
 
 - Computes GAE/returns.
 - Flattens dataset and shuffles minibatches.
@@ -115,12 +115,12 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 #### Losses and Advantages
 
-- PPO objective in `src/jax_rl/losses.py`
-- GAE in `src/jax_rl/advantages.py`
+- PPO objective in `src/jax_rl/systems/ppo/losses.py`
+- GAE in `src/jax_rl/systems/ppo/advantages.py`
 
 #### Training Orchestration
 
-`src/jax_rl/train.py`
+`src/jax_rl/systems/ppo/anakin/system.py`
 
 - Performs configuration validation and setup.
 - Creates env, model, optimizer, logger, and checkpointer.
@@ -128,7 +128,7 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 #### Evaluation
 
-`src/jax_rl/eval.py`
+`src/jax_rl/systems/ppo/eval.py`
 
 - Creates single-env evaluation environment.
 - Runs deterministic policy mode action selection.
@@ -136,7 +136,7 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 #### Checkpointing
 
-`src/jax_rl/checkpoint.py`
+`src/jax_rl/utils/checkpoint.py`
 
 - Encapsulates Orbax manager/checkpointer.
 - Saves and restores `train_state` + RNG key + metadata.
@@ -144,7 +144,7 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 #### Logging
 
-`src/jax_rl/logging.py`
+`src/jax_rl/utils/logging.py`
 
 - Console and TensorBoard sinks behind `jaxRL_Logger`.
 - Metric flattening/stat summarization for arrays.
@@ -152,7 +152,7 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 #### Export
 
-`src/jax_rl/export.py`
+`src/jax_rl/utils/export.py`
 
 - ONNX export through `jax2onnx` using merged graph/state forward wrapper.
 
@@ -164,7 +164,7 @@ These types define the canonical payloads exchanged between rollout, update, che
 - `jaxpallet:<preset>`
 - no prefix (or unmatched prefix) -> Gymnax fallback attempt
 
-Registry components in `src/jax_rl/env.py`:
+Registry components in `src/jax_rl/envs/env.py`:
 
 - `EnvFactory = Callable[[str, int], tuple[Any, Any]]`
 - `_ENV_REGISTRY: dict[str, EnvFactory]`
@@ -188,7 +188,7 @@ Failure mode:
 
 ### 8) Exception Taxonomy
 
-Domain exceptions are defined in `src/jax_rl/exceptions.py`:
+Domain exceptions are defined in `src/jax_rl/utils/exceptions.py`:
 
 - `JaxRLError(Exception)`
 - `ConfigDivisibilityError(JaxRLError, ValueError)`
@@ -224,7 +224,7 @@ Validation/coercion helpers:
 
 ### 10) Training Loop Data Flow
 
-High-level flow in `src/jax_rl/train.py`:
+High-level flow in `src/jax_rl/systems/ppo/anakin/system.py`:
 
 1. Validate rollout/minibatch/device divisibility.
 2. Build env via `make_stoa_env`.
@@ -245,7 +245,7 @@ High-level flow in `src/jax_rl/train.py`:
 
 #### Observation Flattening
 
-`flatten_observation_features(...)` in `src/jax_rl/networks.py`:
+`flatten_observation_features(...)` in `src/jax_rl/networks/networks.py`:
 
 - Accepts array or mapping of arrays.
 - Excludes `action_mask` from concatenated feature vector.
@@ -253,13 +253,13 @@ High-level flow in `src/jax_rl/train.py`:
 
 #### Binpack Logits
 
-`_flatten_binpack_logits(...)` in `src/jax_rl/networks.py`:
+`_flatten_binpack_logits(...)` in `src/jax_rl/networks/networks.py`:
 
 - Transforms score tensor from `[B, E, I]` to flattened logits `[B, I * E * R]` where `R` is inferred from action mask dimensionality.
 
 #### PPO Objective
 
-`ppo_loss(...)` in `src/jax_rl/losses.py`:
+`ppo_loss(...)` in `src/jax_rl/systems/ppo/losses.py`:
 
 - Clipped policy ratio objective.
 - Clipped value target objective.
@@ -268,14 +268,14 @@ High-level flow in `src/jax_rl/train.py`:
 
 #### GAE
 
-`compute_gae(...)` in `src/jax_rl/advantages.py`:
+`compute_gae(...)` in `src/jax_rl/systems/ppo/advantages.py`:
 
 - Supports truncated-episode handling and optional bootstrap values.
 - Uses reverse scan recursion for efficient batched advantage computation.
 
 ### 12) Logging and Observability
 
-`jaxRL_Logger` in `src/jax_rl/logging.py`:
+`jaxRL_Logger` in `src/jax_rl/utils/logging.py`:
 
 - Console sink always active by default.
 - TensorBoard sink enabled when configured.
@@ -317,7 +317,7 @@ Recommended verification commands:
 
 When adding a new module or backend:
 
-1. Keep domain errors explicit and use `exceptions.py` taxonomy.
+1. Keep domain errors explicit and use `utils/exceptions.py` taxonomy.
 2. Keep optional backend imports local to backend builders.
 3. Preserve existing public signatures and payload shapes.
 4. Add targeted tests first, then run full regression suite.
@@ -393,20 +393,24 @@ uv run jax-rl-train
 uv run jax-rl-train actor_lr=0.0005 num_envs=16
 ```
 
-### 3) Minimal config profile (fast local smoke runs)
+### 3) Default config profile (`config/train.yaml`)
 
-Current defaults in `config/train.yaml` are tuned for quick iteration:
+Current repository defaults are:
 
-- `env_name: CartPole-v1`
+- `env_name: rustpool:BinPack-v0`
 - `total_timesteps: 2048`
 - `num_envs: 8`
 - `num_steps: 32`
 - `minibatch_size: 64`
-- `hidden_size: 32`
-- `hidden_layers: 1`
-- `tensorboard_logdir:` (disabled)
+- `network.hidden_dim: 32`
+- `network.num_layers: 1`
+- `tensorboard_logdir: null` (disabled)
 
-This gives short runs that are useful to validate installation and end-to-end pipeline behavior.
+For a local Gymnax smoke run, override the environment at launch time:
+
+```bash
+uv run jax-rl-train env_name=CartPole-v1 total_timesteps=2048 eval_episodes=0
+```
 
 ### 4) Environment-specific examples
 
@@ -555,7 +559,7 @@ For the authoritative list of supported `jax2onnx` operators and `flax.nnx` API 
 
 ### Telemetry and logging
 
-Training telemetry is centralized through `jaxRL_Logger` (`src/jax_rl/logging.py`) with a multi-sink dispatch pattern.
+Training telemetry is centralized through `jaxRL_Logger` (`src/jax_rl/utils/logging.py`) with a multi-sink dispatch pattern.
 
 - Event categories are enforced by `LogEvent`: `ACT`, `TRAIN`, `EVAL`, `ABSOLUTE`, `MISC`.
 - Any JAX/NumPy array logged through `logger.log(...)` is auto-summarized by `describe(...)` to scalar stats:

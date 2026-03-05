@@ -4,13 +4,13 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jax_rl.checkpoint import Checkpointer
-from jax_rl.config import PPOConfig
-from jax_rl.exceptions import CheckpointRestoreError
-from jax_rl.eval import evaluate
+from jax_rl.configs.config import PPOConfig
+from jax_rl.systems.ppo.eval import evaluate
+from jax_rl.systems.ppo.update import make_actor_optimizer, make_critic_optimizer
+from jax_rl.utils.checkpoint import Checkpointer
+from jax_rl.utils.exceptions import CheckpointRestoreError
 from jax_rl.networks import init_policy_value_params
-from jax_rl.types import TrainState
-from jax_rl.update import make_actor_optimizer, make_critic_optimizer
+from jax_rl.utils.types import TrainState
 
 
 def test_checkpoint_roundtrip(tmp_path: Path):

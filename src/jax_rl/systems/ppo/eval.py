@@ -1,10 +1,10 @@
 import jax
 import jax.numpy as jnp
 
-from .config import PPOConfig
-from .env import make_stoa_env
-from .networks import policy_value_apply
-from .types import PolicyValueParams
+from ...configs.config import PPOConfig
+from ...envs.env import make_stoa_env
+from ...networks import policy_value_apply
+from ...utils.types import PolicyValueParams
 
 
 def evaluate(

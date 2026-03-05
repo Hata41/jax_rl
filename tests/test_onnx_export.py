@@ -1,7 +1,7 @@
 import numpy as np
 import jax
 
-from jax_rl.export import export_model_to_onnx
+from jax_rl.utils.export import export_model_to_onnx
 from jax_rl.networks import init_policy_value_params, policy_value_apply
 
 

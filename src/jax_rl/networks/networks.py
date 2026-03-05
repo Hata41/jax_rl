@@ -7,8 +7,8 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from .exceptions import NetworkTargetResolutionError
-from .types import Array, PolicyValueParams
+from ..utils.exceptions import NetworkTargetResolutionError
+from ..utils.types import Array, PolicyValueParams
 
 
 ObservationInput = Mapping[str, Array] | Array

@@ -8,7 +8,7 @@ from stoa.core_wrappers.vmap import VmapWrapper
 from stoa.core_wrappers.wrapper import Wrapper
 from stoa.env_adapters.gymnax import GymnaxToStoa
 
-from .exceptions import EnvironmentNotFoundError
+from ..utils.exceptions import EnvironmentNotFoundError
 
 
 EnvFactory = Callable[[str, int], tuple[Any, Any]]
@@ -53,7 +53,6 @@ class BatchedRecordEpisodeMetrics(RecordEpisodeMetrics):
         timestep = timestep.replace(extras=new_extras)
         return state, timestep
 
-
 class RustpoolObsWrapper(Wrapper):
     @staticmethod
     def _normalize_observation(observation, action_mask):
@@ -93,7 +92,6 @@ class RustpoolObsWrapper(Wrapper):
     def step(self, state, action, env_params=None):
         state, timestep = self._env.step(state, action, env_params)
         return state, self._normalize_timestep(timestep)
-
 
 @register_env("rustpool")
 def _make_rustpool_env(env_name: str, num_envs_per_device: int):

@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
-from jax_rl.exceptions import NetworkTargetResolutionError
+from jax_rl.utils.exceptions import NetworkTargetResolutionError
 from jax_rl.networks import (
     BinPackPolicyValueModel,
     TransformerBlock,

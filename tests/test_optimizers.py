@@ -2,9 +2,9 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from jax_rl.config import PPOConfig
+from jax_rl.configs.config import PPOConfig
 from jax_rl.networks import init_policy_value_params
-from jax_rl.update import make_actor_optimizer, make_critic_optimizer
+from jax_rl.systems.ppo.update import make_actor_optimizer, make_critic_optimizer
 
 
 def _allclose_tree(tree_a, tree_b):

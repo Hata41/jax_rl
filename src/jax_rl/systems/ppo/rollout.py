@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
 
-from .networks import policy_value_apply
-from .types import Array, RolloutBatch, Transition
+from ...networks import policy_value_apply
+from ...utils.types import Array, RolloutBatch, Transition
 
 
 def _extract_done_and_truncated(timestep):

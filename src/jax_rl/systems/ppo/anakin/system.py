@@ -1,19 +1,21 @@
-import jax
-import jax.numpy as jnp
-import numpy as np
 import time
 from dataclasses import asdict
 
-from .checkpoint import Checkpointer
-from .config import PPOConfig
-from .env import make_stoa_env
-from .exceptions import ConfigDivisibilityError
-from .eval import evaluate
-from .logging import extract_completed_episode_metrics, jaxRL_Logger
-from .networks import flatten_observation_features, init_policy_value_params
-from .rollout import collect_rollout
-from .types import LogEvent, RunnerState, TrainState
-from .update import make_actor_optimizer, make_critic_optimizer, ppo_update
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from ....configs.config import PPOConfig
+from ....envs.env import make_stoa_env
+from ....networks import init_policy_value_params
+from ....utils.checkpoint import Checkpointer
+from ....utils.exceptions import ConfigDivisibilityError
+from ....utils.logging import extract_completed_episode_metrics, jaxRL_Logger
+from ....utils.shapes import space_feature_dim, space_flat_dim
+from ....utils.types import LogEvent, RunnerState, TrainState
+from ..eval import evaluate
+from ..update import make_actor_optimizer, make_critic_optimizer
+from .steps import make_ppo_steps
 
 
 def _unreplicate(tree):
@@ -48,60 +50,7 @@ def _extract_learning_rate(actor_opt_state) -> float:
     return float("nan")
 
 
-def _space_flat_dim(space) -> int:
-    shape = getattr(space, "shape", None)
-    if shape is not None:
-        return int(np.prod(shape))
-
-    spaces = getattr(space, "spaces", None)
-    if isinstance(spaces, dict):
-        return int(
-            sum(
-                _space_flat_dim(subspace)
-                for key, subspace in spaces.items()
-                if key != "action_mask"
-            )
-        )
-    if isinstance(space, dict):
-        return int(
-            sum(
-                _space_flat_dim(subspace)
-                for key, subspace in space.items()
-                if key != "action_mask"
-            )
-        )
-
-    if isinstance(space, tuple) and len(space) >= 1:
-        shape = space[0]
-        if isinstance(shape, (tuple, list)):
-            return int(np.prod(shape))
-    if isinstance(space, list):
-        return int(np.prod(space))
-
-    if hasattr(space, "generate_value"):
-        sample_obs = space.generate_value()
-        flat_obs, _ = flatten_observation_features(sample_obs, batch_ndim=0)
-        return int(np.prod(flat_obs.shape))
-
-    raise ValueError(f"Unsupported observation space for flat dim inference: {type(space)}")
-
-
-def _space_feature_dim(obs_space, key: str, default: int) -> int:
-    spaces = getattr(obs_space, "spaces", None)
-    if isinstance(spaces, dict) and key in spaces:
-        leaf = spaces[key]
-        shape = getattr(leaf, "shape", None)
-        if shape is not None:
-            return int(shape[-1])
-
-    if isinstance(obs_space, dict) and key in obs_space:
-        leaf = obs_space[key]
-        if isinstance(leaf, tuple) and len(leaf) >= 1 and isinstance(leaf[0], (tuple, list)):
-            return int(leaf[0][-1])
-    return int(default)
-
-
-def train(config: PPOConfig):
+def build_system(config: PPOConfig):
     if config.rollout_batch_size % config.minibatch_size != 0:
         raise ConfigDivisibilityError(
             "minibatch_size must divide num_envs * num_steps, "
@@ -125,7 +74,7 @@ def train(config: PPOConfig):
 
     env, env_params = make_stoa_env(config.env_name, num_envs_per_device=num_envs_per_device)
     obs_space = env.observation_space(env_params)
-    obs_dim = _space_flat_dim(obs_space)
+    obs_dim = space_flat_dim(obs_space)
 
     action_space = env.action_space(env_params)
     if isinstance(action_space, tuple) and len(action_space) == 1:
@@ -155,8 +104,8 @@ def train(config: PPOConfig):
         network_config=config.network,
         obs_dim=obs_dim,
         action_dims=action_dims,
-        ems_feature_dim=_space_feature_dim(obs_space, "ems_pos", default=6),
-        item_feature_dim=_space_feature_dim(obs_space, "item_dims", default=3),
+        ems_feature_dim=space_feature_dim(obs_space, "ems_pos", default=6),
+        item_feature_dim=space_feature_dim(obs_space, "item_dims", default=3),
     )
     initial_train_state = TrainState(
         params=initial_params,
@@ -208,52 +157,45 @@ def train(config: PPOConfig):
     pmap_init_runner_state = jax.pmap(init_runner_state, axis_name="device")
     runner_state = pmap_init_runner_state(train_state, keys)
 
-    def rollout_step(state: RunnerState):
-        batch, last_values, next_obs, next_env_state, next_key, rollout_infos = collect_rollout(
-            params=state.train_state.params,
-            env=env,
-            env_params=env_params,
-            env_state=state.env_state,
-            obs=state.obs,
-            key=state.key,
-            num_steps=config.num_steps,
-        )
-        rollout_metrics = {
-            "done_fraction": jnp.mean(batch.dones.astype(jnp.float32)),
-        }
-        next_state = RunnerState(
-            train_state=state.train_state,
-            env_state=next_env_state,
-            obs=next_obs,
-            key=next_key,
-        )
-        return next_state, (batch, last_values, rollout_infos, rollout_metrics)
+    return {
+        "runner_state": runner_state,
+        "env": env,
+        "env_params": env_params,
+        "actor_optimizer": actor_optimizer,
+        "critic_optimizer": critic_optimizer,
+        "checkpointer": checkpointer,
+        "start_update": start_update,
+        "num_devices": num_devices,
+        "num_envs_per_device": num_envs_per_device,
+    }
 
-    def update_step(state: RunnerState, batch, last_values):
-        next_train_state, ppo_metrics, next_key = ppo_update(
-            train_state=state.train_state,
-            rollout_batch=batch,
-            last_values=last_values,
-            key=state.key,
-            config=config,
-            actor_optimizer=actor_optimizer,
-            critic_optimizer=critic_optimizer,
-        )
 
-        next_state = RunnerState(
-            train_state=next_train_state,
-            env_state=state.env_state,
-            obs=state.obs,
-            key=next_key,
-        )
-        return next_state, ppo_metrics
+def train(config: PPOConfig):
+    system = build_system(config)
 
-    pmap_rollout = jax.pmap(rollout_step, axis_name="device")
-    pmap_update = jax.pmap(update_step, axis_name="device")
+    runner_state = system["runner_state"]
+    env = system["env"]
+    env_params = system["env_params"]
+    actor_optimizer = system["actor_optimizer"]
+    critic_optimizer = system["critic_optimizer"]
+    checkpointer = system["checkpointer"]
+    start_update = system["start_update"]
+    num_devices = system["num_devices"]
+    num_envs_per_device = system["num_envs_per_device"]
+
+    pmap_rollout, pmap_update = make_ppo_steps(
+        config,
+        env,
+        env_params,
+        actor_optimizer,
+        critic_optimizer,
+    )
+
     latest_metrics = None
     latest_checkpoint = None
     remaining_updates = config.num_updates - start_update
     num_minibatches = config.rollout_batch_size // config.minibatch_size
+
     logger = jaxRL_Logger.from_config(config)
     logger.log_config(config)
     tensorboard_run_dir = (
@@ -342,6 +284,7 @@ def train(config: PPOConfig):
         if eval_metrics:
             merged_metrics.update(logger.materialize(eval_metrics, LogEvent.EVAL))
         latest_metrics = merged_metrics
+
         if config.save_interval_steps > 0 and (
             (global_update_idx + 1) % config.save_interval_steps == 0
             or local_update_idx == remaining_updates - 1

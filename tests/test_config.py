@@ -5,7 +5,7 @@ from hydra.errors import ConfigCompositionException
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
-from jax_rl.config import PPOConfig, register_configs
+from jax_rl.configs.config import PPOConfig, register_configs
 
 
 def _config_dir() -> str:

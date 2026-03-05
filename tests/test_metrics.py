@@ -3,12 +3,12 @@ import numpy as np
 import importlib
 from types import SimpleNamespace
 
-from jax_rl.config import PPOConfig
-from jax_rl.logging import extract_completed_episode_metrics
-from jax_rl.train import (
+from jax_rl.configs.config import PPOConfig
+from jax_rl.systems.ppo.anakin.system import (
     train,
 )
-from jax_rl.types import LogEvent
+from jax_rl.utils.logging import extract_completed_episode_metrics
+from jax_rl.utils.types import LogEvent
 
 
 def _tiny_config(**overrides):
@@ -31,7 +31,7 @@ def _tiny_config(**overrides):
 
 
 def test_sps_calculation_validity(monkeypatch):
-    train_module = importlib.import_module("jax_rl.train")
+    train_module = importlib.import_module("jax_rl.systems.ppo.anakin.system")
 
     config = _tiny_config(eval_episodes=0)
     captured = []
@@ -115,7 +115,7 @@ def test_train_console_output_excludes_reward_mean(capsys):
 
 
 def test_metric_prefix_enforcement_with_eval(monkeypatch):
-    train_module = importlib.import_module("jax_rl.train")
+    train_module = importlib.import_module("jax_rl.systems.ppo.anakin.system")
 
     config = _tiny_config(eval_episodes=1, eval_every=1)
     captured = []

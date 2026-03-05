@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from jax_rl.logging import TensorBoardLogger
-from jax_rl.types import LogEvent
+from jax_rl.utils.logging import TensorBoardLogger
+from jax_rl.utils.types import LogEvent
 
 
 def test_tensorboard_writer_creates_event_file(tmp_path: Path):

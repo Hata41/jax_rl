@@ -5,9 +5,9 @@ import jax.numpy as jnp
 import numpy as np
 from colorama import Fore
 
-from jax_rl.config import PPOConfig
-from jax_rl.logging import BaseLogger, ConsoleLogger, describe, jaxRL_Logger
-from jax_rl.types import LogEvent
+from jax_rl.configs.config import PPOConfig
+from jax_rl.utils.logging import BaseLogger, ConsoleLogger, describe, jaxRL_Logger
+from jax_rl.utils.types import LogEvent
 
 
 def test_describe_array_stats_with_nans():

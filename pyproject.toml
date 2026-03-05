@@ -45,8 +45,12 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
 filterwarnings = [
     'ignore:Setting `jax_pmap_shmap_merge` is deprecated in JAX v0\.9\.0 and will be removed in JAX v0\.10\.0\.:DeprecationWarning:jax\._src\.config',
+    'ignore:Sharding info not provided when restoring\.:UserWarning:orbax\.checkpoint\._src\.serialization\.jax_array_handlers',
+    'ignore:jax\.core\.get_aval is deprecated; use jax\.typeof instead\.:DeprecationWarning:distrax\._src\.utils\.math',
+    "ignore:'\\.value' access is now deprecated\\.:DeprecationWarning",
 ]
 
 [tool.uv.sources]

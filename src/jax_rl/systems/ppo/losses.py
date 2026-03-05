@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
-from .networks import policy_value_apply
-from .types import FlattenBatch
+from ...networks import policy_value_apply
+from ...utils.types import FlattenBatch
 
 
 def ppo_loss(

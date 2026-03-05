@@ -1,7 +1,7 @@
-import jax_rl.env as env_module
+import jax_rl.envs.env as env_module
 import pytest
 
-from jax_rl.exceptions import EnvironmentNotFoundError
+from jax_rl.utils.exceptions import EnvironmentNotFoundError
 
 
 def test_register_env_decorator_dispatches_dummy_prefix(monkeypatch):

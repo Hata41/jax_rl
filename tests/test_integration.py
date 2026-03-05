@@ -5,11 +5,11 @@ from stoa import AutoResetWrapper
 from stoa.core_wrappers.vmap import VmapWrapper
 from stoa.env_types import StepType, TimeStep
 
-from jax_rl.config import PPOConfig
-from jax_rl.env import make_stoa_env
+from jax_rl.configs.config import PPOConfig
+from jax_rl.envs.env import make_stoa_env
 from jax_rl.networks import init_policy_value_params, policy_value_apply
-from jax_rl.rollout import collect_rollout
-from jax_rl.train import train
+from jax_rl.systems.ppo.anakin.system import train
+from jax_rl.systems.ppo.rollout import collect_rollout
 
 
 def _wrapper_chain_types(env):

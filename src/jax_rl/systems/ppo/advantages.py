@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from .types import Array
+from ...utils.types import Array
 
 
 def compute_gae(

@@ -1,13 +1,13 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from .config import PPOConfig, register_configs
-from .runtime import configure_jax_runtime_defaults
+from .configs.config import PPOConfig, register_configs
+from .utils.runtime import configure_jax_runtime_defaults
 
 configure_jax_runtime_defaults()
 
-from .eval import evaluate
-from .train import train
+from .systems.ppo.eval import evaluate
+from .systems.ppo.anakin.system import train
 
 register_configs()
 

@@ -4,7 +4,7 @@ import optax
 
 from .advantages import compute_gae
 from .losses import ppo_loss
-from .types import FlattenBatch, RolloutBatch, TrainState
+from ...utils.types import FlattenBatch, RolloutBatch, TrainState
 
 
 def _total_opt_steps(config) -> int:
