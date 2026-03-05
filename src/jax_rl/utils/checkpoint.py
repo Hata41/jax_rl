@@ -102,11 +102,18 @@ class Checkpointer:
         direct_step = target.name.isdigit() and timestep is None
         if direct_step:
             step = int(target.name)
+            parent_dir = target.parent
+            temp_manager = ocp.CheckpointManager(
+                str(parent_dir),
+                self._checkpointer,
+                options=self._options,
+            )
             if template_items is not None:
-                restored = self._checkpointer.restore(str(target), item=template_items)
+                restored = temp_manager.restore(step, items=template_items)
             else:
-                restored = self._checkpointer.restore(str(target))
-            return {"step": step, "items": restored, "metadata": {}}
+                restored = temp_manager.restore(step)
+            metadata = temp_manager.metadata() if hasattr(temp_manager, "metadata") else {}
+            return {"step": int(step), "items": restored, "metadata": metadata}
 
         temp_manager = ocp.CheckpointManager(
             str(target),

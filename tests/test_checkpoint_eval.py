@@ -1,11 +1,14 @@
+from dataclasses import replace
+import importlib
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import pytest
 
-from jax_rl.configs.config import EnvConfig, ExperimentConfig
+from jax_rl.configs.config import CheckpointConfig, EnvConfig, ExperimentConfig, LoggingConfig, SystemConfig
 from jax_rl.systems.ppo.eval import Evaluator, evaluate
+from jax_rl.systems.ppo.anakin.system import train
 from jax_rl.systems.ppo.update import make_actor_optimizer, make_critic_optimizer
 from jax_rl.utils.checkpoint import Checkpointer
 from jax_rl.utils.exceptions import CheckpointRestoreError, ConfigDivisibilityError
@@ -162,3 +165,142 @@ def test_restore_nonexistent_explicit_path_raises_checkpoint_restore_error(tmp_p
 
     with pytest.raises(CheckpointRestoreError, match="does not exist"):
         checkpointer.restore(checkpoint_path=str(missing_dir))
+
+
+@pytest.mark.integration
+def test_train_resume_from_checkpoint(tmp_path: Path):
+    num_devices = jax.local_device_count()
+    rollout_batch_size = num_devices * 8
+    checkpoint_root = tmp_path / "resume_ckpts"
+
+    config = ExperimentConfig(
+        env=EnvConfig(env_name="CartPole-v1", seed=0),
+        system=SystemConfig(
+            total_timesteps=2 * rollout_batch_size,
+            num_envs=num_devices,
+            num_steps=8,
+            update_epochs=1,
+            minibatch_size=rollout_batch_size,
+        ),
+        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
+        checkpointing=CheckpointConfig(
+            checkpoint_dir=str(checkpoint_root),
+            save_interval_steps=1,
+            max_to_keep=3,
+        ),
+        evaluations={},
+    )
+
+    first_result = train(config)
+    checkpoint_path = first_result["checkpoint_path"]
+
+    assert checkpoint_path is not None
+    assert Path(checkpoint_path).exists()
+
+    resumed_checkpointing = replace(config.checkpointing, resume_from=str(checkpoint_path))
+    resumed_system = replace(config.system, total_timesteps=3 * rollout_batch_size)
+    resumed_config = replace(
+        config,
+        checkpointing=resumed_checkpointing,
+        system=resumed_system,
+    )
+
+    resumed_result = train(resumed_config)
+
+    assert resumed_result["start_update"] == 2
+
+
+@pytest.mark.integration
+def test_evaluator_greedy_behavior(monkeypatch):
+    eval_module = importlib.import_module("jax_rl.systems.ppo.eval")
+
+    class _TinyTimeStep:
+        def __init__(self, observation, reward):
+            self.observation = observation
+            self.reward = reward
+
+        def last(self):
+            return jnp.zeros((self.reward.shape[0],), dtype=jnp.bool_)
+
+    class _TinyEvalEnv:
+        def __init__(self, num_envs_per_device: int):
+            self.num_envs_per_device = int(num_envs_per_device)
+
+        def reset(self, key, env_params):
+            del key, env_params
+            obs = jnp.zeros((self.num_envs_per_device, 4), dtype=jnp.float32)
+            timestep = _TinyTimeStep(
+                observation=obs,
+                reward=jnp.zeros((self.num_envs_per_device,), dtype=jnp.float32),
+            )
+            return obs, timestep
+
+        def step(self, state, action, env_params):
+            del env_params
+            next_obs = state + 1.0
+            reward = jnp.asarray(action, dtype=jnp.float32)
+            timestep = _TinyTimeStep(observation=next_obs, reward=reward)
+            return next_obs, timestep
+
+        def close(self):
+            return None
+
+    class _DeterministicPolicyDist:
+        def __init__(self, batch_size: int):
+            self.batch_size = int(batch_size)
+
+        def mode(self):
+            return jnp.zeros((self.batch_size,), dtype=jnp.int32)
+
+        def sample(self, key):
+            del key
+            return jnp.ones((self.batch_size,), dtype=jnp.int32)
+
+    def _fake_make_stoa_env(env_name, num_envs_per_device, env_kwargs=None):
+        del env_name, env_kwargs
+        return _TinyEvalEnv(num_envs_per_device), None
+
+    def _fake_policy_value_apply(graphdef, state, obs):
+        del graphdef, state
+        batch_size = int(obs.shape[0])
+        return _DeterministicPolicyDist(batch_size), jnp.zeros((batch_size,), dtype=jnp.float32)
+
+    monkeypatch.setattr(eval_module, "make_stoa_env", _fake_make_stoa_env)
+    monkeypatch.setattr(eval_module, "policy_value_apply", _fake_policy_value_apply)
+
+    num_devices = jax.local_device_count()
+    params = init_policy_value_params(
+        jax.random.PRNGKey(21),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
+        obs_dim=4,
+        action_dims=2,
+    )
+    replicated_params = PolicyValueParams(
+        graphdef=params.graphdef,
+        state=jax.tree_util.tree_map(
+            lambda x: jnp.broadcast_to(x, (num_devices,) + x.shape),
+            params.state,
+        ),
+    )
+
+    greedy_eval = Evaluator(
+        env_name="CartPole-v1",
+        num_episodes=num_devices,
+        max_steps_per_episode=5,
+        greedy=True,
+    )
+    greedy_metrics = greedy_eval.run(replicated_params=replicated_params, seed=0)
+    greedy_eval.close()
+
+    stochastic_eval = Evaluator(
+        env_name="CartPole-v1",
+        num_episodes=num_devices,
+        max_steps_per_episode=5,
+        greedy=False,
+    )
+    stochastic_metrics = stochastic_eval.run(replicated_params=replicated_params, seed=0)
+    stochastic_eval.close()
+
+    assert greedy_metrics["return_mean"] == 0.0
+    assert stochastic_metrics["return_mean"] > greedy_metrics["return_mean"]
+    assert stochastic_metrics["steps"] == greedy_metrics["steps"]

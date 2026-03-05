@@ -1,13 +1,17 @@
 import jax
 import jax.numpy as jnp
 from flax import nnx
+import pytest
 
 from jax_rl.networks import (
     BinPackPolicyValueModel,
+    PolicyValueModel,
     _flatten_binpack_logits,
+    flatten_observation_features,
     init_policy_value_params,
     policy_value_apply,
 )
+from jax_rl.utils.exceptions import NetworkTargetResolutionError
 
 
 def _path_token(entry) -> str:
@@ -40,9 +44,9 @@ def test_multidiscrete_action_space_output_shapes():
     key = jax.random.PRNGKey(0)
     params = init_policy_value_params(
         key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [32, 32]},
         obs_dim=4,
         action_dims=(2, 3),
-        hidden_sizes=(32, 32),
     )
 
     obs = jax.random.normal(jax.random.PRNGKey(1), (8, 4))
@@ -59,9 +63,9 @@ def test_modular_forward_pass_value_shape():
     key = jax.random.PRNGKey(3)
     params = init_policy_value_params(
         key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [64, 64]},
         obs_dim=4,
         action_dims=2,
-        hidden_sizes=(64, 64),
     )
 
     obs = jnp.zeros((16, 4), dtype=jnp.float32)
@@ -70,13 +74,101 @@ def test_modular_forward_pass_value_shape():
     assert values.shape == (16,)
 
 
+def test_policy_value_shapes():
+    key = jax.random.PRNGKey(0)
+    params = init_policy_value_params(
+        key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [64, 64]},
+        obs_dim=4,
+        action_dims=2,
+    )
+
+    obs = jnp.zeros((16, 4), dtype=jnp.float32)
+    dist, values = policy_value_apply(params.graphdef, params.state, obs)
+
+    assert dist.sample(jax.random.PRNGKey(1)).shape == (16,)
+    assert values.shape == (16,)
+
+
+def test_invalid_network_target_raises_error():
+    with pytest.raises(NetworkTargetResolutionError):
+        init_policy_value_params(
+            key=jax.random.PRNGKey(11),
+            network_config={"_target_": "invalid.path.Model"},
+            obs_dim=4,
+            action_dims=2,
+        )
+
+
+def test_shared_vs_separate_torso_features():
+    obs = jnp.ones((8, 4), dtype=jnp.float32)
+
+    shared_model = PolicyValueModel(
+        obs_dim=4,
+        action_dims=2,
+        hidden_sizes=(32, 32),
+        rngs=nnx.Rngs(jax.random.PRNGKey(101)),
+        shared_torso=True,
+    )
+    separate_model = PolicyValueModel(
+        obs_dim=4,
+        action_dims=2,
+        hidden_sizes=(32, 32),
+        rngs=nnx.Rngs(jax.random.PRNGKey(202)),
+        shared_torso=False,
+    )
+
+    shared_obs_features, _ = flatten_observation_features(obs)
+    shared_actor_features = shared_model.shared_torso(shared_obs_features)
+    shared_critic_features = shared_model.shared_torso(shared_obs_features)
+    assert jnp.allclose(shared_actor_features, shared_critic_features)
+
+    separate_obs_features, _ = flatten_observation_features(obs)
+    separate_actor_features = separate_model.actor_torso(separate_obs_features)
+    separate_critic_features = separate_model.critic_torso(separate_obs_features)
+    assert not jnp.allclose(separate_actor_features, separate_critic_features)
+
+    separate_params = init_policy_value_params(
+        key=jax.random.PRNGKey(303),
+        network_config={
+            "_target_": "jax_rl.networks.PolicyValueModel",
+            "hidden_sizes": [32, 32],
+            "shared_torso": False,
+        },
+        obs_dim=4,
+        action_dims=2,
+    )
+    shared_params = init_policy_value_params(
+        key=jax.random.PRNGKey(404),
+        network_config={
+            "_target_": "jax_rl.networks.PolicyValueModel",
+            "hidden_sizes": [32, 32],
+            "shared_torso": True,
+        },
+        obs_dim=4,
+        action_dims=2,
+    )
+
+    separate_paths = [
+        "/".join(_path_token(entry) for entry in path)
+        for path, _ in jax.tree_util.tree_leaves_with_path(separate_params.state)
+    ]
+    shared_paths = [
+        "/".join(_path_token(entry) for entry in path)
+        for path, _ in jax.tree_util.tree_leaves_with_path(shared_params.state)
+    ]
+    assert any("actor_torso" in path for path in separate_paths)
+    assert any("critic_torso" in path for path in separate_paths)
+    assert any("shared_torso" in path for path in shared_paths)
+
+
 def test_orthogonal_head_scales_actor_vs_critic_variance():
     key = jax.random.PRNGKey(7)
     params = init_policy_value_params(
         key,
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [128, 128]},
         obs_dim=8,
         action_dims=4,
-        hidden_sizes=(128, 128),
     )
 
     actor_w = _find_first_kernel(params.state, module_prefix="actor_head")

@@ -103,6 +103,7 @@ def test_batched_rollout_no_vmap():
 
     assert batch.obs.shape == (2, 4, 3)
     assert batch.actions.shape == (2, 4)
+    assert jnp.allclose(batch.obs[1], batch.obs[0] + 1.0)
 
 
 def test_policy_action_masking():
