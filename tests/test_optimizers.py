@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from jax_rl.configs.config import PPOConfig
+from jax_rl.configs.config import ExperimentConfig, SystemConfig
 from jax_rl.networks import init_policy_value_params
 from jax_rl.systems.ppo.update import (
     _zero_out_except_module,
@@ -18,7 +18,7 @@ def _allclose_tree(tree_a, tree_b):
 
 
 def test_actor_and_critic_optimizers_are_separate():
-    config = PPOConfig(actor_lr=1.0, critic_lr=0.0)
+    config = ExperimentConfig(system=SystemConfig(actor_lr=1.0, critic_lr=0.0))
     params = init_policy_value_params(
         jax.random.PRNGKey(0),
         network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
@@ -56,18 +56,20 @@ def test_actor_and_critic_optimizers_are_separate():
 
 
 def test_actor_learning_rate_schedule_reaches_zero_at_total_opt_steps():
-    config = PPOConfig(
-        total_timesteps=8_192,
-        num_envs=8,
-        num_steps=16,
-        update_epochs=4,
-        minibatch_size=32,
-        actor_lr=3e-4,
+    config = ExperimentConfig(
+        system=SystemConfig(
+            total_timesteps=8_192,
+            num_envs=8,
+            num_steps=16,
+            update_epochs=4,
+            minibatch_size=32,
+            actor_lr=3e-4,
+        )
     )
     expected_total_steps = (
         config.num_updates
-        * config.update_epochs
-        * (config.rollout_batch_size // config.minibatch_size)
+        * config.system.update_epochs
+        * (config.rollout_batch_size // config.system.minibatch_size)
     )
 
     optimizer = make_actor_optimizer(config)

@@ -1,9 +1,10 @@
 import jax
 import numpy as np
 import importlib
+from dataclasses import replace
 from types import SimpleNamespace
 
-from jax_rl.configs.config import PPOConfig
+from jax_rl.configs.config import EnvConfig, ExperimentConfig, LoggingConfig, SystemConfig
 from jax_rl.systems.ppo.anakin.system import (
     train,
 )
@@ -13,20 +14,28 @@ from jax_rl.utils.types import LogEvent
 
 def _tiny_config(**overrides):
     num_envs = jax.local_device_count()
-    config = PPOConfig(
-        env_name="CartPole-v1",
-        seed=0,
-        total_timesteps=num_envs * 8,
-        num_envs=num_envs,
-        num_steps=8,
-        minibatch_size=num_envs * 8,
-        update_epochs=2,
-        hidden_size=16,
-        hidden_layers=1,
-        log_every=1,
+    config = ExperimentConfig(
+        env=EnvConfig(env_name="CartPole-v1", seed=0),
+        system=SystemConfig(
+            total_timesteps=num_envs * 8,
+            num_envs=num_envs,
+            num_steps=8,
+            minibatch_size=num_envs * 8,
+            update_epochs=2,
+        ),
+        logging=LoggingConfig(log_every=1),
         evaluations={},
     )
-    return PPOConfig(**{**config.__dict__, **overrides})
+
+    updated_config = config
+    for key, value in overrides.items():
+        if key in {"env", "system", "checkpointing", "logging"} and isinstance(value, dict):
+            nested_config = getattr(updated_config, key)
+            updated_config = replace(updated_config, **{key: replace(nested_config, **value)})
+            continue
+        updated_config = replace(updated_config, **{key: value})
+
+    return updated_config
 
 
 def test_sps_calculation_validity(monkeypatch):
@@ -74,8 +83,10 @@ def test_sps_calculation_validity(monkeypatch):
         prefix = "" if event is LogEvent.ABSOLUTE else f"{event.value}/"
         flat.update({f"{prefix}{k}": float(np.asarray(v)) for k, v in metrics.items()})
 
-    expected_act_sps = config.num_envs * config.num_steps
-    expected_train_sps = config.update_epochs * (config.rollout_batch_size // config.minibatch_size)
+    expected_act_sps = config.system.num_envs * config.system.num_steps
+    expected_train_sps = config.system.update_epochs * (
+        config.rollout_batch_size // config.system.minibatch_size
+    )
 
     assert flat["act/steps_per_second"] == expected_act_sps
     assert flat["train/steps_per_second"] == expected_train_sps

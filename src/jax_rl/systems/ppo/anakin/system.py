@@ -2,7 +2,7 @@ import time
 
 import jax
 
-from ....configs.config import PPOConfig
+from ....configs.config import ExperimentConfig
 from ....utils.logging import extract_completed_episode_metrics, extract_learning_rate, jaxRL_Logger
 from ....utils.runtime import PhaseTimer
 from ....utils.types import LogEvent
@@ -15,7 +15,7 @@ def _unreplicate(tree):
     return jax.tree_util.tree_map(lambda x: x[0], tree)
 
 
-def train(config: PPOConfig):
+def train(config: ExperimentConfig):
     system = build_system(config)
 
     runner_state = system.runner_state
@@ -39,13 +39,13 @@ def train(config: PPOConfig):
     latest_metrics = None
     latest_checkpoint = None
     remaining_updates = config.num_updates - start_update
-    num_minibatches = config.rollout_batch_size // config.minibatch_size
+    num_minibatches = config.rollout_batch_size // config.system.minibatch_size
 
     logger = jaxRL_Logger.from_config(config)
     logger.log_config(config)
     tensorboard_run_dir = (
-        str(config.tensorboard_logdir + "/" + config.tensorboard_run_name)
-        if config.tensorboard_logdir
+        str(config.logging.tensorboard_logdir + "/" + config.logging.tensorboard_run_name)
+        if config.logging.tensorboard_logdir
         else None
     )
 
@@ -64,7 +64,7 @@ def train(config: PPOConfig):
 
     evaluation_manager = EvaluationManager(
         evaluations=config.evaluations,
-        default_env_name=config.env_name,
+        default_env_name=config.env.env_name,
         evaluator_cls=Evaluator,
         now_fn=time.time,
     )
@@ -84,7 +84,7 @@ def train(config: PPOConfig):
             act_metrics = dict(rollout_metrics)
             act_metrics["steps_per_second"] = timer.steps_per_second(
                 "act",
-                num_devices * num_envs_per_device * config.num_steps,
+                num_devices * num_envs_per_device * config.system.num_steps,
             )
             act_metrics.update(extract_completed_episode_metrics(rollout_infos))
 
@@ -96,7 +96,7 @@ def train(config: PPOConfig):
             train_metrics = dict(train_metrics)
             train_metrics["steps_per_second"] = timer.steps_per_second(
                 "train",
-                config.update_epochs * num_minibatches,
+                config.system.update_epochs * num_minibatches,
             )
             actor_opt_state = _unreplicate(runner_state.train_state.actor_opt_state)
             train_metrics["learning_rate"] = extract_learning_rate(actor_opt_state)
@@ -107,7 +107,7 @@ def train(config: PPOConfig):
             eval_metrics = evaluation_manager.run_if_needed(
                 update_idx=global_update_idx,
                 params=runner_state.train_state.params,
-                seed=int(config.seed + global_update_idx),
+                seed=int(config.env.seed + global_update_idx),
             )
 
             logger.log(act_metrics, log_step, LogEvent.ACT)
@@ -124,8 +124,8 @@ def train(config: PPOConfig):
                 merged_metrics.update(logger.materialize(eval_metrics, LogEvent.EVAL))
             latest_metrics = merged_metrics
 
-            if config.save_interval_steps > 0 and (
-                (global_update_idx + 1) % config.save_interval_steps == 0
+            if config.checkpointing.save_interval_steps > 0 and (
+                (global_update_idx + 1) % config.checkpointing.save_interval_steps == 0
                 or local_update_idx == remaining_updates - 1
             ):
                 train_state_to_save = _unreplicate(runner_state.train_state)

@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from ....configs.config import PPOConfig
+from ....configs.config import ExperimentConfig
 from ....envs.env import make_stoa_env
 from ....networks import init_policy_value_params
 from ....utils.checkpoint import Checkpointer
@@ -36,29 +36,32 @@ def _infer_action_dims(action_space) -> int | tuple[int, ...]:
     )
 
 
-def _setup_environment(config: PPOConfig):
-    if config.rollout_batch_size % config.minibatch_size != 0:
+def _setup_environment(config: ExperimentConfig):
+    if config.rollout_batch_size % config.system.minibatch_size != 0:
         raise ConfigDivisibilityError(
             "minibatch_size must divide num_envs * num_steps, "
-            f"got {config.minibatch_size} and {config.rollout_batch_size}."
+            f"got {config.system.minibatch_size} and {config.rollout_batch_size}."
         )
     if config.num_updates < 1:
         raise ValueError("total_timesteps is too small for one PPO update.")
 
     num_devices = config.local_device_count
-    if config.num_envs % num_devices != 0:
+    if config.system.num_envs % num_devices != 0:
         raise ConfigDivisibilityError(
             "num_envs must be divisible by local device count, "
-            f"got num_envs={config.num_envs} and num_devices={num_devices}."
+            f"got num_envs={config.system.num_envs} and num_devices={num_devices}."
         )
-    if config.minibatch_size % num_devices != 0:
+    if config.system.minibatch_size % num_devices != 0:
         raise ConfigDivisibilityError(
             "minibatch_size must be divisible by local device count, "
-            f"got minibatch_size={config.minibatch_size} and num_devices={num_devices}."
+            f"got minibatch_size={config.system.minibatch_size} and num_devices={num_devices}."
         )
-    num_envs_per_device = config.num_envs // num_devices
+    num_envs_per_device = config.system.num_envs // num_devices
 
-    env, env_params = make_stoa_env(config.env_name, num_envs_per_device=num_envs_per_device)
+    env, env_params = make_stoa_env(
+        config.env.env_name,
+        num_envs_per_device=num_envs_per_device,
+    )
     obs_space = env.observation_space(env_params)
     obs_dim = space_flat_dim(obs_space)
     action_dims = _infer_action_dims(env.action_space(env_params))
@@ -67,13 +70,13 @@ def _setup_environment(config: PPOConfig):
 
 
 def _init_train_state(
-    config: PPOConfig,
+    config: ExperimentConfig,
     obs_space,
     obs_dim: int,
     action_dims: int | tuple[int, ...],
     num_devices: int,
 ):
-    key = jax.random.PRNGKey(config.seed)
+    key = jax.random.PRNGKey(config.env.seed)
     key, init_net_key = jax.random.split(key, 2)
 
     actor_optimizer = make_actor_optimizer(config)
@@ -95,16 +98,16 @@ def _init_train_state(
     )
 
     checkpointer = Checkpointer(
-        checkpoint_dir=config.checkpoint_dir,
-        max_to_keep=config.max_to_keep,
-        keep_period=config.keep_period,
-        save_interval_steps=config.save_interval_steps,
+        checkpoint_dir=config.checkpointing.checkpoint_dir,
+        max_to_keep=config.checkpointing.max_to_keep,
+        keep_period=config.checkpointing.keep_period,
+        save_interval_steps=config.checkpointing.save_interval_steps,
         metadata={"config": asdict(config)},
     )
 
-    if config.resume_from:
+    if config.checkpointing.resume_from:
         payload = checkpointer.restore(
-            checkpoint_path=config.resume_from,
+            checkpoint_path=config.checkpointing.resume_from,
             template_train_state=initial_train_state,
             template_key=key,
         )
@@ -136,7 +139,7 @@ def _init_runner_state(per_device_train_state, runner_key, env, env_params):
     )
 
 
-def build_system(config: PPOConfig) -> SystemComponents:
+def build_system(config: ExperimentConfig) -> SystemComponents:
     (
         env,
         env_params,

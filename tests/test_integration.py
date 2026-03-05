@@ -6,7 +6,13 @@ from stoa import AutoResetWrapper
 from stoa.core_wrappers.vmap import VmapWrapper
 from stoa.env_types import StepType, TimeStep
 
-from jax_rl.configs.config import PPOConfig
+from jax_rl.configs.config import (
+    CheckpointConfig,
+    EnvConfig,
+    ExperimentConfig,
+    LoggingConfig,
+    SystemConfig,
+)
 from jax_rl.envs.env import make_stoa_env
 from jax_rl.networks import init_policy_value_params, policy_value_apply
 from jax_rl.systems.ppo.anakin.system import train
@@ -126,13 +132,17 @@ def test_policy_action_masking():
 def test_train_pipeline_dry_run():
     pytest.importorskip("jaxpallet")
 
-    config = PPOConfig(
-        env_name="jaxpallet:PMC-PLD",
-        total_timesteps=4,
-        num_envs=2,
-        num_steps=2,
-        update_epochs=1,
-        minibatch_size=2,
+    config = ExperimentConfig(
+        env=EnvConfig(env_name="jaxpallet:PMC-PLD"),
+        system=SystemConfig(
+            total_timesteps=4,
+            num_envs=2,
+            num_steps=2,
+            update_epochs=1,
+            minibatch_size=2,
+        ),
+        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
+        checkpointing=CheckpointConfig(save_interval_steps=0),
         network={
             "_target_": "jax_rl.networks.BinPackPolicyValueModel",
             "hidden_dim": 16,
@@ -140,9 +150,6 @@ def test_train_pipeline_dry_run():
             "num_layers": 1,
         },
         evaluations={},
-        log_every=1,
-        save_interval_steps=0,
-        tensorboard_logdir=None,
     )
 
     result = train(config)
@@ -178,13 +185,17 @@ def test_train_pipeline_evaluators_closed(monkeypatch):
     monkeypatch.setattr(train_module, "Evaluator", _FakeEvaluator)
 
     num_envs = jax.local_device_count()
-    config = PPOConfig(
-        env_name="CartPole-v1",
-        total_timesteps=num_envs * 8,
-        num_envs=num_envs,
-        num_steps=8,
-        update_epochs=1,
-        minibatch_size=num_envs * 8,
+    config = ExperimentConfig(
+        env=EnvConfig(env_name="CartPole-v1"),
+        system=SystemConfig(
+            total_timesteps=num_envs * 8,
+            num_envs=num_envs,
+            num_steps=8,
+            update_epochs=1,
+            minibatch_size=num_envs * 8,
+        ),
+        logging=LoggingConfig(tensorboard_logdir=None),
+        checkpointing=CheckpointConfig(save_interval_steps=0),
         evaluations={
             "eval_1": {
                 "env_name": "CartPole-v1",
@@ -197,8 +208,6 @@ def test_train_pipeline_evaluators_closed(monkeypatch):
                 "num_episodes": num_envs,
             },
         },
-        save_interval_steps=0,
-        tensorboard_logdir=None,
     )
 
     train(config)

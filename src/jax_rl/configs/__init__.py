@@ -1,3 +1,3 @@
-from .config import PPOConfig, register_configs
+from .config import ExperimentConfig, register_configs
 
-__all__ = ["PPOConfig", "register_configs"]
+__all__ = ["ExperimentConfig", "register_configs"]

@@ -25,7 +25,7 @@ This section describes the current architecture of `jax_rl` end-to-end, with emp
 
 Primary package surface is exported from `src/jax_rl/__init__.py`:
 
-- `PPOConfig`
+- `ExperimentConfig`
 - `train`
 - `evaluate`
 - `Checkpointer`
@@ -45,8 +45,8 @@ Primary package surface is exported from `src/jax_rl/__init__.py`:
 The training entry point is in `src/jax_rl/cli.py`:
 
 1. Load `config/train.yaml` via Hydra.
-2. Apply command-line overrides (for example `actor_lr=0.001`).
-3. Convert the composed config to a typed `PPOConfig` object.
+2. Apply command-line overrides (for example `system.actor_lr=0.001`).
+3. Convert the composed config to a typed `ExperimentConfig` object.
 4. Execute `train(config)` and optionally run one or more named eval profiles from `config.evaluations`.
 
 #### Runtime Defaults
@@ -55,12 +55,12 @@ The training entry point is in `src/jax_rl/cli.py`:
 
 ### 4) Configuration Model
 
-Configuration is centralized in `src/jax_rl/configs/config.py` via immutable `PPOConfig`.
+Configuration is centralized in `src/jax_rl/configs/config.py` via immutable `ExperimentConfig`.
 
 Notable computed properties:
 
-- `rollout_batch_size = num_envs * num_steps`
-- `num_updates = total_timesteps // rollout_batch_size`
+- `rollout_batch_size = system.num_envs * system.num_steps`
+- `num_updates = system.total_timesteps // rollout_batch_size`
 - `local_device_count = jax.local_device_count()`
 
 Network creation is Hydra-driven through `network._target_`, with runtime dimensions injected at construction.
@@ -296,7 +296,7 @@ The following signatures are stable and should not be changed without versioned 
 
 - `make_stoa_env(env_name: str, num_envs_per_device: int)`
 - `Checkpointer.restore(...)`
-- `train(config: PPOConfig)`
+- `train(config: ExperimentConfig)`
 - `ppo_loss(...)`
 
 Internal refactors should preserve:
@@ -345,17 +345,17 @@ uv pip install -e .[dev]
 uv run jax-rl-train
 
 # run with Hydra overrides
-uv run jax-rl-train actor_lr=0.001 num_envs=32
+uv run jax-rl-train system.actor_lr=0.001 system.num_envs=32
 
 # nested overrides
 uv run jax-rl-train network.hidden_dim=128
 
 # examples (set these values inside config/train.yaml):
-# save_interval_steps: 50
-# checkpoint_dir: checkpoints
-# resume_from: checkpoints
-# tensorboard_logdir: runs
-# tensorboard_run_name: cartpole_baseline
+# checkpointing.save_interval_steps: 50
+# checkpointing.checkpoint_dir: checkpoints
+# checkpointing.resume_from: checkpoints
+# logging.tensorboard_logdir: runs
+# logging.tensorboard_run_name: cartpole_baseline
 # evaluations.default_eval.num_episodes: 10
 
 # in another terminal
@@ -398,26 +398,27 @@ uv sync --extra dev
 uv run jax-rl-train
 
 # launch with overrides
-uv run jax-rl-train actor_lr=0.0005 num_envs=16
+uv run jax-rl-train system.actor_lr=0.0005 system.num_envs=16
 ```
 
 ### 3) Default config profile (`config/train.yaml`)
 
 Current repository defaults are:
 
-- `env_name: rustpool:BinPack-v0`
-- `total_timesteps: 2048`
-- `num_envs: 8`
-- `num_steps: 32`
-- `minibatch_size: 64`
+- `env.env_name: rustpool:BinPack-v0`
+- `system.total_timesteps: 2048`
+- `system.num_envs: 8`
+- `system.num_steps: 32`
+- `system.minibatch_size: 64`
 - `network.hidden_dim: 32`
 - `network.num_layers: 1`
-- `tensorboard_logdir: null` (disabled)
+- `logging.tensorboard_logdir: runs_tb`
 
 For a local Gymnax smoke run, override the environment at launch time:
 
 ```bash
-uv run jax-rl-train env_name=CartPole-v1 total_timesteps=2048 evaluations.default_eval.num_episodes=0
+uv run jax-rl-train env.env_name=CartPole-v1 system.total_timesteps=2048 evaluations.default_eval.num_episodes=0
+
 ```
 
 Example evaluation profiles block:
@@ -442,45 +443,52 @@ evaluations:
 #### CartPole / Gymnax fallback
 
 ```yaml
-env_name: CartPole-v1
-total_timesteps: 200000
-num_envs: 16
-num_steps: 128
-minibatch_size: 256
+env:
+  env_name: CartPole-v1
+system:
+  total_timesteps: 200000
+  num_envs: 16
+  num_steps: 128
+  minibatch_size: 256
 ```
 
 #### JaxPallet
 
 ```yaml
-env_name: jaxpallet:PMC-PLD
-total_timesteps: 500000
-num_envs: 8
-num_steps: 64
-minibatch_size: 128
+env:
+  env_name: jaxpallet:PMC-PLD
+system:
+  total_timesteps: 500000
+  num_envs: 8
+  num_steps: 64
+  minibatch_size: 128
 ```
 
 #### RustPool
 
 ```yaml
-env_name: rustpool:BinPack-v0
-total_timesteps: 500000
-num_envs: 8
-num_steps: 64
-minibatch_size: 128
+env:
+  env_name: rustpool:BinPack-v0
+system:
+  total_timesteps: 500000
+  num_envs: 8
+  num_steps: 64
+  minibatch_size: 128
 ```
 
 Notes for `rustpool`:
 
 - Observation keys are normalized in the env wrapper to the binpack model contract (`ems_pos`, `item_dims`, `item_mask`, `action_mask`).
-- `num_envs` must be divisible by local device count.
+- `system.num_envs` must be divisible by local device count.
 
 ### 5) TensorBoard usage
 
 Enable in config:
 
 ```yaml
-tensorboard_logdir: runs_tb
-tensorboard_run_name: exp_001
+logging:
+  tensorboard_logdir: runs_tb
+  tensorboard_run_name: exp_001
 ```
 
 Run training, then in another terminal:
@@ -496,9 +504,10 @@ If TensorBoard backend initialization fails, training continues and a warning is
 Example config values:
 
 ```yaml
-checkpoint_dir: checkpoints
-save_interval_steps: 100
-resume_from: checkpoints
+checkpointing:
+  checkpoint_dir: checkpoints
+  save_interval_steps: 100
+  resume_from: checkpoints
 ```
 
 Behavior:
@@ -542,10 +551,10 @@ export JAX_SKIP_CUDA_CONSTRAINTS_CHECK=1
 ```
 
 - `ValueError: num_envs must be divisible by local device count`
-  - Fix: set `num_envs` to a multiple of `jax.local_device_count()`.
+  - Fix: set `system.num_envs` to a multiple of `jax.local_device_count()`.
 
 - `ValueError: minibatch_size must divide num_envs * num_steps`
-  - Fix: choose `minibatch_size` that cleanly divides rollout batch size.
+  - Fix: choose `system.minibatch_size` that cleanly divides rollout batch size.
 
 ### 9) Suggested run matrix before long experiments
 
@@ -578,7 +587,7 @@ For the authoritative list of supported `jax2onnx` operators and `flax.nnx` API 
 ## Notes
 
 - Supported action spaces: `Discrete` and `MultiDiscrete`.
-- Actor and critic use separate learning rates (`actor_lr`, `critic_lr`).
+- Actor and critic use separate learning rates (`system.actor_lr`, `system.critic_lr`).
 - The training loop is functional and deterministic under a fixed seed.
 - Checkpoints are managed with Orbax (`orbax-checkpoint`) and store train state, PRNG key, metrics, and metadata.
 
@@ -598,7 +607,7 @@ Training telemetry is centralized through `jaxRL_Logger` (`src/jax_rl/utils/logg
   - `MISC`: yellow
   - `ABSOLUTE`: plain
 - Keys are normalized for readability (e.g. `loss_total` -> `Loss total`).
-- TensorBoard sink is enabled only when `tensorboard_logdir` is configured.
+- TensorBoard sink is enabled only when `logging.tensorboard_logdir` is configured.
 - Sink init failures are non-fatal: logger warns once to stderr and continues training.
 
 Minimal usage pattern inside training loop:

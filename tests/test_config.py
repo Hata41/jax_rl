@@ -6,7 +6,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 import jax
 
-from jax_rl.configs.config import PPOConfig, register_configs
+from jax_rl.configs.config import ExperimentConfig, register_configs
 from jax_rl.networks import init_policy_value_params
 
 
@@ -20,7 +20,7 @@ def test_hydra_compose_loads_train_yaml_and_converts_to_typed_config():
         cfg = compose(config_name="train")
 
     obj = OmegaConf.to_object(cfg)
-    assert isinstance(obj, PPOConfig)
+    assert isinstance(obj, ExperimentConfig)
 
 
 def test_hydra_compose_overrides_apply_to_typed_config():
@@ -28,13 +28,13 @@ def test_hydra_compose_overrides_apply_to_typed_config():
     with initialize_config_dir(version_base=None, config_dir=_config_dir()):
         cfg = compose(
             config_name="train",
-            overrides=["actor_lr=0.005", "num_envs=32"],
+            overrides=["system.actor_lr=0.005", "system.num_envs=32"],
         )
 
     obj = OmegaConf.to_object(cfg)
-    assert isinstance(obj, PPOConfig)
-    assert obj.actor_lr == pytest.approx(0.005)
-    assert obj.num_envs == 32
+    assert isinstance(obj, ExperimentConfig)
+    assert obj.system.actor_lr == pytest.approx(0.005)
+    assert obj.system.num_envs == 32
 
 
 def test_hydra_compose_rejects_unknown_override_key():
@@ -50,7 +50,7 @@ def test_binpack_network_config_instantiates_without_base_mlp_keys():
         cfg = compose(config_name="train")
 
     obj = OmegaConf.to_object(cfg)
-    assert isinstance(obj, PPOConfig)
+    assert isinstance(obj, ExperimentConfig)
 
     params = init_policy_value_params(
         key=jax.random.PRNGKey(0),

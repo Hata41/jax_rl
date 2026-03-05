@@ -8,8 +8,8 @@ from ...utils.types import FlattenBatch, RolloutBatch, TrainState
 
 
 def _total_opt_steps(config) -> int:
-    num_minibatches = config.rollout_batch_size // config.minibatch_size
-    return config.num_updates * config.update_epochs * num_minibatches
+    num_minibatches = config.rollout_batch_size // config.system.minibatch_size
+    return config.num_updates * config.system.update_epochs * num_minibatches
 
 
 def _path_token(entry) -> str:
@@ -63,17 +63,17 @@ def _base_optimizer(learning_rate: float, config):
     )
     adam = optax.inject_hyperparams(optax.adam)(learning_rate=lr_schedule)
     return optax.chain(
-        optax.clip_by_global_norm(config.max_grad_norm),
+        optax.clip_by_global_norm(config.system.max_grad_norm),
         adam,
     )
 
 
 def make_actor_optimizer(config):
-    return _base_optimizer(config.actor_lr, config)
+    return _base_optimizer(config.system.actor_lr, config)
 
 
 def make_critic_optimizer(config):
-    return _base_optimizer(config.critic_lr, config)
+    return _base_optimizer(config.system.critic_lr, config)
 
 
 def _flatten_batch(
@@ -110,8 +110,8 @@ def ppo_update(
         truncated=rollout_batch.truncated,
         values=rollout_batch.values,
         last_values=last_values,
-        gamma=config.gamma,
-        gae_lambda=config.gae_lambda,
+        gamma=config.system.gamma,
+        gae_lambda=config.system.gae_lambda,
         bootstrap_values=rollout_batch.bootstrap_values,
     )
     advantages = jnp.nan_to_num(advantages, nan=0.0, posinf=0.0, neginf=0.0)
@@ -122,12 +122,12 @@ def ppo_update(
     dataset = _flatten_batch(rollout_batch, advantages, returns)
 
     num_devices = max(jax.local_device_count(), 1)
-    if config.minibatch_size % num_devices != 0:
+    if config.system.minibatch_size % num_devices != 0:
         raise ValueError(
             "minibatch_size must be divisible by local device count, "
-            f"got minibatch_size={config.minibatch_size} and num_devices={num_devices}."
+            f"got minibatch_size={config.system.minibatch_size} and num_devices={num_devices}."
         )
-    local_minibatch_size = config.minibatch_size // num_devices
+    local_minibatch_size = config.system.minibatch_size // num_devices
     batch_size = rollout_batch.rewards.shape[0] * rollout_batch.rewards.shape[1]
     num_minibatches = batch_size // local_minibatch_size
 
@@ -146,9 +146,9 @@ def ppo_update(
                 curr_state.params.graphdef,
                 state,
                 minibatch,
-                config.clip_epsilon,
-                config.value_coef,
-                config.entropy_coef,
+                config.system.clip_epsilon,
+                config.system.value_coef,
+                config.system.entropy_coef,
             )
             (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
                 curr_state.params.state
@@ -200,7 +200,7 @@ def ppo_update(
         epoch_step,
         (train_state, key),
         xs=None,
-        length=config.update_epochs,
+        length=config.system.update_epochs,
     )
     metrics = jax.tree_util.tree_map(jnp.mean, epoch_metrics)
     return next_train_state, metrics, next_key

@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jax_rl.configs.config import PPOConfig
+from jax_rl.configs.config import EnvConfig, ExperimentConfig
 from jax_rl.systems.ppo.eval import Evaluator, evaluate
 from jax_rl.systems.ppo.update import make_actor_optimizer, make_critic_optimizer
 from jax_rl.utils.checkpoint import Checkpointer
@@ -14,7 +14,7 @@ from jax_rl.utils.types import PolicyValueParams, TrainState
 
 
 def test_checkpoint_roundtrip(tmp_path: Path):
-    config = PPOConfig()
+    config = ExperimentConfig()
     key = jax.random.PRNGKey(0)
     params = init_policy_value_params(
         key,
@@ -36,7 +36,7 @@ def test_checkpoint_roundtrip(tmp_path: Path):
         max_to_keep=2,
         keep_period=None,
         save_interval_steps=1,
-        metadata={"config": {"env_name": config.env_name}},
+        metadata={"config": {"env_name": config.env.env_name}},
     )
     success = checkpointer.save(
         timestep=1,
@@ -58,7 +58,7 @@ def test_checkpoint_roundtrip(tmp_path: Path):
 
 
 def test_max_to_keep(tmp_path: Path):
-    config = PPOConfig()
+    config = ExperimentConfig()
     key = jax.random.PRNGKey(7)
     params = init_policy_value_params(
         key,
@@ -79,7 +79,7 @@ def test_max_to_keep(tmp_path: Path):
         max_to_keep=2,
         keep_period=None,
         save_interval_steps=1,
-        metadata={"config": {"seed": config.seed}},
+        metadata={"config": {"seed": config.env.seed}},
     )
     for step in range(1, 5):
         assert checkpointer.save(
@@ -93,7 +93,7 @@ def test_max_to_keep(tmp_path: Path):
 
 
 def test_evaluate_compiled_scan():
-    config = PPOConfig(seed=1)
+    config = ExperimentConfig(env=EnvConfig(seed=1))
     params = init_policy_value_params(
         jax.random.PRNGKey(1),
         network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
@@ -103,7 +103,7 @@ def test_evaluate_compiled_scan():
     metrics = evaluate(
         params,
         env_name="CartPole-v1",
-        seed=config.seed,
+        seed=config.env.seed,
         num_episodes=2,
         max_steps_per_episode=16,
         greedy=True,

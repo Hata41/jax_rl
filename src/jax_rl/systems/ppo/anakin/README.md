@@ -5,7 +5,7 @@ This document explains exactly how PPO training runs in the `anakin` system: the
 ## Entry Point
 
 - Main training entry: `src/jax_rl/systems/ppo/anakin/system.py`
-- Public function: `train(config: PPOConfig)`
+- Public function: `train(config: ExperimentConfig)`
 
 `train(...)` is an orchestrator. It delegates initialization, rollout/update kernels, evaluation, logging, and checkpointing to specialized modules.
 

@@ -17,7 +17,7 @@ def make_ppo_steps(config, env, env_params, actor_optimizer, critic_optimizer):
             env_state=state.env_state,
             obs=state.obs,
             key=state.key,
-            num_steps=config.num_steps,
+            num_steps=config.system.num_steps,
         )
         rollout_metrics = {
             "done_fraction": jnp.mean(batch.dones.astype(jnp.float32)),

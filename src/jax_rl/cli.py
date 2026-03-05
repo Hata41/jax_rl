@@ -3,7 +3,7 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from .configs.config import PPOConfig, register_configs
+from .configs.config import ExperimentConfig, register_configs
 from .utils.runtime import configure_jax_runtime_defaults
 
 configure_jax_runtime_defaults()
@@ -20,12 +20,14 @@ _CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "config")
 def main(cfg: DictConfig) -> None:
     typed = OmegaConf.to_object(cfg)
 
-    if isinstance(typed, PPOConfig):
+    if isinstance(typed, ExperimentConfig):
         config = typed
     elif isinstance(typed, dict):
-        config = PPOConfig(**typed)
+        config = ExperimentConfig(**typed)
     else:
-        raise TypeError(f"Hydra config did not resolve to PPOConfig. Got: {type(typed)}")
+        raise TypeError(
+            f"Hydra config did not resolve to ExperimentConfig. Got: {type(typed)}"
+        )
 
     output = train(config)
     if output.get("tensorboard_run_dir"):
@@ -35,11 +37,11 @@ def main(cfg: DictConfig) -> None:
         num_episodes = int(eval_cfg.get("num_episodes", 10))
         if num_episodes <= 0:
             continue
-        env_name = str(eval_cfg.get("env_name", config.env_name))
+        env_name = str(eval_cfg.get("env_name", config.env.env_name))
         eval_metrics = evaluate(
             params=output["params"],
             env_name=env_name,
-            seed=config.seed,
+            seed=config.env.seed,
             num_episodes=num_episodes,
             max_steps_per_episode=int(eval_cfg.get("max_steps_per_episode", 1_000)),
             greedy=bool(eval_cfg.get("greedy", True)),

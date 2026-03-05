@@ -6,9 +6,13 @@ import jax
 
 
 @dataclass
-class PPOConfig:
+class EnvConfig:
     env_name: str = "CartPole-v1"
     seed: int = 0
+
+
+@dataclass
+class SystemConfig:
     total_timesteps: int = 100_000
 
     num_envs: int = 16
@@ -27,8 +31,30 @@ class PPOConfig:
     minibatch_size: int = 256
     max_grad_norm: float = 0.5
 
-    hidden_size: int = 64
-    hidden_layers: int = 2
+
+@dataclass
+class CheckpointConfig:
+    checkpoint_dir: str = "checkpoints"
+    save_interval_steps: int = 0
+    max_to_keep: int = 1
+    keep_period: Optional[int] = None
+    resume_from: str | None = None
+
+
+@dataclass
+class LoggingConfig:
+    log_every: int = 10
+    tensorboard_logdir: str | None = None
+    tensorboard_run_name: str = "default"
+
+
+@dataclass
+class ExperimentConfig:
+    env: EnvConfig = field(default_factory=EnvConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
+    checkpointing: CheckpointConfig = field(default_factory=CheckpointConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
+
     network: dict[str, Any] = field(
         default_factory=lambda: {
             "_target_": "jax_rl.networks.PolicyValueModel",
@@ -36,23 +62,15 @@ class PPOConfig:
         }
     )
 
-    log_every: int = 10
     evaluations: dict[str, dict[str, Any]] = field(default_factory=dict)
-    checkpoint_dir: str = "checkpoints"
-    save_interval_steps: int = 0
-    max_to_keep: int = 1
-    keep_period: Optional[int] = None
-    resume_from: str | None = None
-    tensorboard_logdir: str | None = None
-    tensorboard_run_name: str = "default"
 
     @property
     def rollout_batch_size(self) -> int:
-        return self.num_envs * self.num_steps
+        return self.system.num_envs * self.system.num_steps
 
     @property
     def num_updates(self) -> int:
-        return self.total_timesteps // self.rollout_batch_size
+        return self.system.total_timesteps // self.rollout_batch_size
 
     @property
     def local_device_count(self) -> int:
@@ -69,5 +87,5 @@ def register_configs() -> None:
         return
 
     cs = ConfigStore.instance()
-    cs.store(name="base_config", node=PPOConfig)
+    cs.store(name="base_config", node=ExperimentConfig)
     _CONFIGS_REGISTERED = True
