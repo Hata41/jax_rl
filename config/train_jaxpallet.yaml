@@ -5,6 +5,7 @@ defaults:
 env:
   env_name: jaxpallet:PMC-PLD
   seed: 0
+  env_kwargs: {}
 
 system:
   total_timesteps: 2048000

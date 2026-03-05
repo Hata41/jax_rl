@@ -28,13 +28,20 @@ def test_hydra_compose_overrides_apply_to_typed_config():
     with initialize_config_dir(version_base=None, config_dir=_config_dir()):
         cfg = compose(
             config_name="train",
-            overrides=["system.actor_lr=0.005", "system.num_envs=32"],
+            overrides=[
+                "system.actor_lr=0.005",
+                "system.num_envs=32",
+                "system.cuda_visible_devices='0,1'",
+                "+env.env_kwargs.max_items=42",
+            ],
         )
 
     obj = OmegaConf.to_object(cfg)
     assert isinstance(obj, ExperimentConfig)
     assert obj.system.actor_lr == pytest.approx(0.005)
     assert obj.system.num_envs == 32
+    assert obj.system.cuda_visible_devices == "0,1"
+    assert obj.env.env_kwargs["max_items"] == 42
 
 
 def test_hydra_compose_rejects_unknown_override_key():

@@ -9,11 +9,14 @@ import jax
 class EnvConfig:
     env_name: str = "CartPole-v1"
     seed: int = 0
+    env_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class SystemConfig:
     total_timesteps: int = 100_000
+    platform: str | None = None
+    cuda_visible_devices: str | None = None
 
     num_envs: int = 16
     num_steps: int = 128

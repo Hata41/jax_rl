@@ -4,7 +4,16 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
-def configure_jax_runtime_defaults() -> None:
+def configure_jax_runtime_defaults(
+    platform: str | None = None,
+    cuda_visible_devices: str | None = None,
+) -> None:
+    if cuda_visible_devices is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(cuda_visible_devices)
+
+    if platform is not None:
+        os.environ["JAX_PLATFORMS"] = str(platform)
+
     if os.environ.get("JAX_PLATFORMS") or os.environ.get("JAX_PLATFORM_NAME"):
         return
 

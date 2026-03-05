@@ -61,6 +61,7 @@ def _setup_environment(config: ExperimentConfig):
     env, env_params = make_stoa_env(
         config.env.env_name,
         num_envs_per_device=num_envs_per_device,
+        env_kwargs=config.env.env_kwargs,
     )
     obs_space = env.observation_space(env_params)
     obs_dim = space_flat_dim(obs_space)

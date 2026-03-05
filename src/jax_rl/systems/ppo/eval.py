@@ -50,11 +50,13 @@ class Evaluator:
         num_episodes: int,
         max_steps_per_episode: int,
         greedy: bool,
+        env_kwargs: dict[str, Any] | None = None,
     ):
         self.env_name = str(env_name)
         self.num_episodes = int(num_episodes)
         self.max_steps_per_episode = int(max_steps_per_episode)
         self.greedy = bool(greedy)
+        self.env_kwargs = dict(env_kwargs or {})
         self.num_devices = int(jax.local_device_count())
         self._closed = False
 
@@ -77,6 +79,7 @@ class Evaluator:
         self.env, self.env_params = make_stoa_env(
             self.env_name,
             num_envs_per_device=self.num_envs_per_device,
+            env_kwargs=self.env_kwargs,
         )
 
         def _device_eval(params: PolicyValueParams, device_key):
@@ -161,6 +164,7 @@ class EvaluationManager:
         self,
         evaluations: dict[str, dict[str, Any]] | None,
         default_env_name: str,
+        default_env_kwargs: dict[str, Any] | None,
         evaluator_cls=Evaluator,
         now_fn=None,
     ):
@@ -179,6 +183,7 @@ class EvaluationManager:
                 num_episodes=num_episodes,
                 max_steps_per_episode=int(cfg.get("max_steps_per_episode", 1_000)),
                 greedy=bool(cfg.get("greedy", True)),
+                env_kwargs=dict(cfg.get("env_kwargs", default_env_kwargs or {})),
             )
             self._eval_every_by_name[eval_name] = int(cfg.get("eval_every", 10))
 
@@ -224,12 +229,14 @@ def evaluate(
     num_episodes: int = 10,
     max_steps_per_episode: int = 1_000,
     greedy: bool = True,
+    env_kwargs: dict[str, Any] | None = None,
 ):
     evaluator = Evaluator(
         env_name=env_name,
         num_episodes=num_episodes,
         max_steps_per_episode=max_steps_per_episode,
         greedy=greedy,
+        env_kwargs=env_kwargs,
     )
     try:
         if evaluator.disabled:

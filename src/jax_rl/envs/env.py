@@ -11,7 +11,7 @@ from stoa.env_adapters.gymnax import GymnaxToStoa
 from ..utils.exceptions import EnvironmentNotFoundError
 
 
-EnvFactory = Callable[[str, int], tuple[Any, Any]]
+EnvFactory = Callable[[str, int, dict[str, Any]], tuple[Any, Any]]
 _ENV_REGISTRY: dict[str, EnvFactory] = {}
 
 
@@ -94,22 +94,26 @@ class RustpoolObsWrapper(Wrapper):
         return state, self._normalize_timestep(timestep)
 
 @register_env("rustpool")
-def _make_rustpool_env(env_name: str, num_envs_per_device: int):
+def _make_rustpool_env(env_name: str, num_envs_per_device: int, env_kwargs: dict[str, Any]):
     task_id = env_name.split(":", 1)[1]
     from rustpool.envpool_api.stoa_wrapper import StoaRustpoolWrapper
 
-    env = StoaRustpoolWrapper(task_id=task_id, num_envs_per_device=num_envs_per_device)
+    env = StoaRustpoolWrapper(
+        task_id=task_id,
+        num_envs_per_device=num_envs_per_device,
+        **env_kwargs,
+    )
     env = RustpoolObsWrapper(env)
     env = BatchedRecordEpisodeMetrics(env)
     return env, None
 
 
 @register_env("jaxpallet")
-def _make_jaxpallet_env(env_name: str, num_envs_per_device: int):
+def _make_jaxpallet_env(env_name: str, num_envs_per_device: int, env_kwargs: dict[str, Any]):
     preset = env_name.split(":", 1)[1]
     from jaxpallet.stoa_adapter import JaxPalletToStoa
 
-    env = JaxPalletToStoa(preset=preset)
+    env = JaxPalletToStoa(preset=preset, **env_kwargs)
     env = AddRNGKey(env)
     env = RecordEpisodeMetrics(env)
     env = AutoResetWrapper(env, next_obs_in_extras=True)
@@ -117,20 +121,25 @@ def _make_jaxpallet_env(env_name: str, num_envs_per_device: int):
     return env, None
 
 
-def make_stoa_env(env_name: str, num_envs_per_device: int):
+def make_stoa_env(
+    env_name: str,
+    num_envs_per_device: int,
+    env_kwargs: dict[str, Any] | None = None,
+):
+    kwargs_payload = dict(env_kwargs or {})
     prefix, has_prefix, _ = env_name.partition(":")
     factory = _ENV_REGISTRY.get(prefix.lower()) if has_prefix else None
 
     if factory is not None:
         try:
-            return factory(env_name, num_envs_per_device)
+            return factory(env_name, num_envs_per_device, kwargs_payload)
         except Exception as exc:
             raise EnvironmentNotFoundError(
                 f"Failed to construct environment '{env_name}' with registered prefix '{prefix}'."
             ) from exc
 
     try:
-        base_env, env_params = make_gymnax_env(env_name)
+        base_env, env_params = make_gymnax_env(env_name, **kwargs_payload)
         env = GymnaxToStoa(base_env, env_params)
         env = RecordEpisodeMetrics(env)
         env = AutoResetWrapper(env, next_obs_in_extras=True)

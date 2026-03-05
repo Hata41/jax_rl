@@ -8,9 +8,6 @@ from .utils.runtime import configure_jax_runtime_defaults
 
 configure_jax_runtime_defaults()
 
-from .systems.ppo.eval import evaluate
-from .systems.ppo.anakin.system import train
-
 register_configs()
 
 _CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "config")
@@ -18,6 +15,19 @@ _CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "config")
 
 @hydra.main(version_base=None, config_path=_CONFIG_DIR, config_name="train")
 def main(cfg: DictConfig) -> None:
+    system_cfg = cfg.get("system") or {}
+    platform = system_cfg.get("platform") if hasattr(system_cfg, "get") else None
+    cuda_visible_devices = (
+        system_cfg.get("cuda_visible_devices") if hasattr(system_cfg, "get") else None
+    )
+    configure_jax_runtime_defaults(
+        platform=platform,
+        cuda_visible_devices=cuda_visible_devices,
+    )
+
+    from .systems.ppo.eval import evaluate
+    from .systems.ppo.anakin.system import train
+
     typed = OmegaConf.to_object(cfg)
 
     if isinstance(typed, ExperimentConfig):
@@ -45,6 +55,7 @@ def main(cfg: DictConfig) -> None:
             num_episodes=num_episodes,
             max_steps_per_episode=int(eval_cfg.get("max_steps_per_episode", 1_000)),
             greedy=bool(eval_cfg.get("greedy", True)),
+            env_kwargs=dict(eval_cfg.get("env_kwargs", config.env.env_kwargs)),
         )
         eval_str = " ".join(
             f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"

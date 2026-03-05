@@ -162,8 +162,8 @@ def test_train_pipeline_evaluators_closed(monkeypatch):
     counters = {"init": 0, "run": 0, "close": 0}
 
     class _FakeEvaluator:
-        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy):
-            del env_name, max_steps_per_episode, greedy
+        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy, env_kwargs=None):
+            del env_name, max_steps_per_episode, greedy, env_kwargs
             self.num_episodes = int(num_episodes)
             counters["init"] += 1
 

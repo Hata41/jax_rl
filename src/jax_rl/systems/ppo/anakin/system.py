@@ -65,6 +65,7 @@ def train(config: ExperimentConfig):
     evaluation_manager = EvaluationManager(
         evaluations=config.evaluations,
         default_env_name=config.env.env_name,
+        default_env_kwargs=config.env.env_kwargs,
         evaluator_cls=Evaluator,
         now_fn=time.time,
     )

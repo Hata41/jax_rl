@@ -5,6 +5,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from jax_rl.configs.config import EnvConfig, ExperimentConfig, LoggingConfig, SystemConfig
+from jax_rl.systems.ppo.eval import EvaluationManager
 from jax_rl.systems.ppo.anakin.system import (
     train,
 )
@@ -161,8 +162,8 @@ def test_metric_prefix_enforcement_with_eval(monkeypatch):
             return
 
     class _FakeEvaluator:
-        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy):
-            del env_name, max_steps_per_episode, greedy
+        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy, env_kwargs=None):
+            del env_name, max_steps_per_episode, greedy, env_kwargs
             self.num_episodes = int(num_episodes)
 
         def run(self, replicated_params, seed):
@@ -237,8 +238,8 @@ def test_multiple_evaluations_logging(monkeypatch):
             return
 
     class _FakeEvaluator:
-        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy):
-            del env_name, max_steps_per_episode, greedy
+        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy, env_kwargs=None):
+            del env_name, max_steps_per_episode, greedy, env_kwargs
             self.num_episodes = int(num_episodes)
 
         def run(self, replicated_params, seed):
@@ -272,3 +273,55 @@ def test_multiple_evaluations_logging(monkeypatch):
 
     assert "eval_1/return_mean" in merged_eval_metrics
     assert "eval_2/return_mean" in merged_eval_metrics
+
+
+def test_evaluation_env_kwargs_default_and_override(monkeypatch):
+    captured_env_kwargs = {}
+
+    class _FakeEvaluator:
+        def __init__(self, env_name, num_episodes, max_steps_per_episode, greedy, env_kwargs=None):
+            del env_name, max_steps_per_episode, greedy
+            self.num_episodes = int(num_episodes)
+            self.env_kwargs = dict(env_kwargs or {})
+            label = "eval_default"
+            if self.env_kwargs.get("max_items") == 100:
+                label = "eval_override"
+            captured_env_kwargs[label] = self.env_kwargs
+
+        def run(self, replicated_params, seed):
+            del replicated_params, seed
+            return {
+                "return_mean": float(self.num_episodes),
+                "return_std": 0.0,
+                "return_min": 1.0,
+                "return_max": 1.0,
+                "episodes": int(self.num_episodes),
+                "steps": 10,
+            }
+
+        def close(self):
+            return
+
+    manager = EvaluationManager(
+        evaluations={
+            "eval_default": {
+                "env_name": "CartPole-v1",
+                "eval_every": 1,
+                "num_episodes": 1,
+            },
+            "eval_override": {
+                "env_name": "CartPole-v1",
+                "eval_every": 1,
+                "num_episodes": 1,
+                "env_kwargs": {"max_items": 100},
+            },
+        },
+        default_env_name="CartPole-v1",
+        default_env_kwargs={"max_items": 50},
+        evaluator_cls=_FakeEvaluator,
+    )
+
+    manager.close()
+
+    assert captured_env_kwargs["eval_default"] == {"max_items": 50}
+    assert captured_env_kwargs["eval_override"] == {"max_items": 100}

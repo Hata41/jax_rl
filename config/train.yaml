@@ -9,6 +9,7 @@ defaults:
 env:
   env_name: rustpool:BinPack-v0
   seed: 0
+  env_kwargs: {}
 
 system:
   total_timesteps: 2048
