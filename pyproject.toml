@@ -14,6 +14,7 @@ dependencies = [
     "gymnax>=0.0.8",
     "stoa-env",
     "rustpool",
+    "rlpallet",
     "jaxpallet",
     "tensorboard>=2.6",
     "colorama>=0.4.6",
@@ -54,5 +55,6 @@ filterwarnings = [
 
 [tool.uv.sources]
 stoa-env = { git = "https://github.com/EdanToledo/Stoa.git", rev = "main" }
-rustpool = { path = "../rustpool", editable = true }
+rustpool = { path = "../rustpool" }
+rlpallet = { path = "../rlpallet", editable = true }
 jaxpallet = { path = "../jaxpallet", editable = true }

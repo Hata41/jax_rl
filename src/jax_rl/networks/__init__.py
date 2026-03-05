@@ -1,8 +1,13 @@
 from .networks import (
 	BinPackPolicyValueModel,
+	BinPackActorHead,
+	BinPackCriticHead,
+	BinPackTorso,
 	CategoricalPolicyDist,
+	ModularPolicyValueModel,
 	MultiDiscretePolicyDist,
 	PolicyValueModel,
+	RustpalletInputAdapterV2,
 	TransformerBlock,
 	_flatten_binpack_logits,
 	flatten_observation_features,
@@ -12,9 +17,14 @@ from .networks import (
 
 __all__ = [
 	"BinPackPolicyValueModel",
+	"BinPackActorHead",
+	"BinPackCriticHead",
+	"BinPackTorso",
 	"CategoricalPolicyDist",
+	"ModularPolicyValueModel",
 	"MultiDiscretePolicyDist",
 	"PolicyValueModel",
+	"RustpalletInputAdapterV2",
 	"TransformerBlock",
 	"_flatten_binpack_logits",
 	"flatten_observation_features",

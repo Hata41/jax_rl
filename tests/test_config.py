@@ -23,6 +23,26 @@ def test_hydra_compose_loads_train_yaml_and_converts_to_typed_config():
     assert isinstance(obj, ExperimentConfig)
 
 
+def test_hydra_compose_loads_train_rlpallet_uld_yaml_and_converts_to_typed_config():
+    register_configs()
+    with initialize_config_dir(version_base=None, config_dir=_config_dir()):
+        cfg = compose(config_name="train_rlpallet_uld")
+
+    obj = OmegaConf.to_object(cfg)
+    assert isinstance(obj, ExperimentConfig)
+    assert obj.env.env_name == "rlpallet:UldEnv-v2"
+
+
+def test_hydra_compose_loads_train_modular_v2_yaml_and_converts_to_typed_config():
+    register_configs()
+    with initialize_config_dir(version_base=None, config_dir=_config_dir()):
+        cfg = compose(config_name="train_modular_v2")
+
+    obj = OmegaConf.to_object(cfg)
+    assert isinstance(obj, ExperimentConfig)
+    assert obj.env.env_name == "rlpallet:UldEnv-v2"
+
+
 def test_hydra_compose_overrides_apply_to_typed_config():
     register_configs()
     with initialize_config_dir(version_base=None, config_dir=_config_dir()):

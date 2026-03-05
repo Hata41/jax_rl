@@ -1,0 +1,129 @@
+defaults:
+  - base_config
+  - _self_
+
+env:
+  # Choices:
+  # - rustpool:<task_id>   (example: rustpool:BinPack-v0)
+  # - rlpallet:<task_id>   (example: rlpallet:UldEnv-v2)
+  # - jaxpallet:<preset>   (example: jaxpallet:PMC-PLD)
+  # - gymnax env id        (example: CartPole-v1)
+  env_name: rlpallet:UldEnv-v2
+  seed: 0
+  # Constructor kwargs forwarded to the rlpallet backend.
+  env_kwargs:
+    max_items: 10                     # Maximum physical items to generate or track
+    max_ems: 40                       # Maximum Empty Maximal Spaces (EMS) to track
+    max_episode_steps: 30             # Step limit before truncation (enforced by gym wrapper)
+    
+    uld_preset: "PMC-PLD"             # Container geometry. Choices: AKE-PLD, B737NS2, PGA-Q5, PLA-PLD, PLA-PWG, PMC-PLD, PMC-PWG, PMC-Q5, PMC-Q6, uld_setup
+    
+    # --- Generator Settings ---
+    generator_type: "twophase_physics" # Choices: basic, physics, twophase, twophase_physics, dataset
+    target_groups: 10                 # Target number of unique SKUs/prototypes (Used in twophase generators)
+    max_mult: 5                       # Maximum quantity per SKU group
+    prob_split_one_item: 0.3          # Probability of asymmetric splitting (0.0 to 1.0)
+    split_num_same_items: 6           # Max items generated per symmetric split
+    min_dimension: 100                # Minimum size (mm) for generated items
+    min_density: 1e-9                 # Minimum generated density
+    max_density: 1e-2                 # Maximum generated density
+    dataset_path: "data/eval_data.csv" # Required only if generator_type="dataset"
+    
+    # --- Environment Mechanics ---
+    reward_type: "dense"              # Choices: dense, sparse, stability, convex_hull, compactness, hull_sparse, hull_dense, pure_hull_dense, gravity_support, floor_plan
+    action_mode: "Oriented"           # Choices: Simple, Oriented, Heuristic
+    item_representation: "Group"      # Choices: Instance, Group (UldEnv-v2 expects Group)
+    parallel_strategy: "None"         # Choices: None, ItemBased, WorkStealing, OrientationParallel
+
+system:
+  total_timesteps: 2048000
+  # Choices: null (auto/default), "cpu", "cuda"
+  platform: null
+  # Choices: null (all visible), "0", "1", "0,1", ...
+  cuda_visible_devices: null
+  num_envs: 64
+  num_steps: 32
+  actor_lr: 0.0003
+  critic_lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+  update_epochs: 1
+  minibatch_size: 64
+  max_grad_norm: 0.5
+
+network:
+  _delete_: true
+  _target_: jax_rl.networks.ModularPolicyValueModel
+  input_adapter:
+    _target_: jax_rl.networks.RustpalletInputAdapterV2
+    d_model: 16
+  shared_torso:
+    _target_: jax_rl.networks.BinPackTorso
+    hidden_dim: 16
+    num_heads: 1
+    num_layers: 1
+  actor_head:
+    _target_: jax_rl.networks.BinPackActorHead
+    hidden_dim: 16
+    num_rotations: 6
+  critic_head:
+    _target_: jax_rl.networks.BinPackCriticHead
+    hidden_dim: 16
+
+checkpointing:
+  checkpoint_dir: checkpoints
+  save_interval_steps: 0
+  max_to_keep: 1
+  keep_period: null
+  resume_from: null
+
+logging:
+  log_every: 1
+  tensorboard_logdir: runs_tb
+  tensorboard_run_name: rlpallet_uld
+
+evaluations:
+  default_eval:
+    env_name: rlpallet:UldEnv-v2
+    # Evaluation envs inherit from the base env_kwargs, but you can override specific ones here
+    env_kwargs:
+      max_items: 10
+      target_groups: 10
+    eval_every: 1
+    num_episodes: 160
+    max_steps_per_episode: 30
+    greedy: true
+
+  stress_eval:
+    env_name: rlpallet:UldEnv-v2
+    env_kwargs:
+      max_items: 25                     # Maximum physical items to generate or track
+      max_ems: 50                       # Maximum Empty Maximal Spaces (EMS) to track
+      max_episode_steps: 25             # Step limit before truncation (enforced by gym wrapper)
+      
+      uld_preset: "PMC-PLD"             # Container geometry. Choices: AKE-PLD, B737NS2, PGA-Q5, PLA-PLD, PLA-PWG, PMC-PLD, PMC-PWG, PMC-Q5, PMC-Q6, uld_setup
+      
+      # --- Generator Settings ---
+      generator_type: "twophase_physics" # Choices: basic, physics, twophase, twophase_physics, dataset
+      target_groups: 5               # Target number of unique SKUs/prototypes (Used in twophase generators)
+      max_mult: 5                       # Maximum quantity per SKU group
+      prob_split_one_item: 0.3          # Probability of asymmetric splitting (0.0 to 1.0)
+      split_num_same_items: 6           # Max items generated per symmetric split
+      min_dimension: 100                # Minimum size (mm) for generated items
+      min_density: 1e-9                 # Minimum generated density
+      max_density: 1e-2                 # Maximum generated density
+      dataset_path: "data/eval_data.csv" # Required only if generator_type="dataset"
+      
+      # --- Environment Mechanics ---
+      reward_type: "dense"              # Choices: dense, sparse, stability, convex_hull, compactness, hull_sparse, hull_dense, pure_hull_dense, gravity_support, floor_plan
+      action_mode: "Oriented"           # Choices: Simple, Oriented, Heuristic
+      item_representation: "Group"      # Choices: Instance, Group (UldEnv-v2 expects Group)
+      parallel_strategy: "None"         # Choices: None, ItemBased, WorkStealing, OrientationParallel
+
+    eval_every: 1
+    num_episodes: 160
+    max_steps_per_episode: 40
+    greedy: true

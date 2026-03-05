@@ -5,7 +5,10 @@ import pytest
 
 from jax_rl.networks import (
     BinPackPolicyValueModel,
+    CategoricalPolicyDist,
+    ModularPolicyValueModel,
     PolicyValueModel,
+    RustpalletInputAdapterV2,
     _flatten_binpack_logits,
     flatten_observation_features,
     init_policy_value_params,
@@ -189,6 +192,104 @@ def _dummy_binpack_obs(batch_size: int = 2, max_ems: int = 40, max_items: int = 
         "item_mask": jnp.ones((batch_size, max_items), dtype=jnp.bool_),
         "action_mask": jnp.ones((batch_size, max_actions), dtype=jnp.bool_),
     }
+
+
+def _dummy_v2_obs(batch_size: int = 2, max_ems: int = 10, max_items: int = 5):
+    rotations = 6
+    return {
+        "uld_dims": jnp.full((batch_size, 3), 10.0, dtype=jnp.float32),
+        "max_weight": jnp.full((batch_size,), 100.0, dtype=jnp.float32),
+        "item_dims": jnp.full((batch_size, max_items, 3), 2.0, dtype=jnp.float32),
+        "item_pos": jnp.full((batch_size, max_items, 3), 1.0, dtype=jnp.float32),
+        "item_weights": jnp.full((batch_size, max_items), 4.0, dtype=jnp.float32),
+        "ems_dims": jnp.full((batch_size, max_ems, 3), 8.0, dtype=jnp.float32),
+        "ems_pos": jnp.full((batch_size, max_ems, 3), 1.5, dtype=jnp.float32),
+        "group_counts": jnp.full((batch_size, max_items), 2.0, dtype=jnp.float32),
+        "item_mask": jnp.ones((batch_size, max_items), dtype=jnp.bool_),
+        "ems_mask": jnp.ones((batch_size, max_ems), dtype=jnp.bool_),
+        "action_mask": jnp.ones((batch_size, max_items * max_ems * rotations), dtype=jnp.bool_),
+    }
+
+
+def test_adapter_v2_feature_generation():
+    d_model = 32
+    adapter = RustpalletInputAdapterV2(d_model=d_model, rngs=nnx.Rngs(jax.random.PRNGKey(2001)))
+    obs = _dummy_v2_obs(batch_size=2, max_ems=10, max_items=5)
+
+    ems_embeddings, item_embeddings, ems_mask, expanded_item_mask = adapter(obs)
+
+    assert ems_embeddings.shape == (2, 10, d_model)
+    assert item_embeddings.shape == (2, 5 * 6, d_model)
+    assert ems_mask.shape == (2, 10)
+    assert expanded_item_mask.shape == (2, 5 * 6)
+
+
+def test_adapter_v2_fallback_logic():
+    d_model = 16
+    adapter = RustpalletInputAdapterV2(d_model=d_model, rngs=nnx.Rngs(jax.random.PRNGKey(2002)))
+    obs = _dummy_v2_obs(batch_size=2, max_ems=10, max_items=5)
+    obs.pop("group_counts")
+
+    ems_embeddings, item_embeddings, ems_mask, expanded_item_mask = adapter(obs)
+
+    assert ems_embeddings.shape == (2, 10, d_model)
+    assert item_embeddings.shape == (2, 5 * 6, d_model)
+    assert ems_mask.shape == (2, 10)
+    assert expanded_item_mask.shape == (2, 5 * 6)
+
+
+def test_sinusoidal_encoding_variance():
+    adapter = RustpalletInputAdapterV2(d_model=32, rngs=nnx.Rngs(jax.random.PRNGKey(2003)))
+    enc_1 = adapter._get_sinusoidal_encoding(jnp.array([[1.0]], dtype=jnp.float32))
+    enc_2 = adapter._get_sinusoidal_encoding(jnp.array([[2.0]], dtype=jnp.float32))
+
+    assert not jnp.allclose(enc_1, enc_2)
+
+
+def test_modular_model_forward_pass():
+    class DummyInputAdapter(nnx.Module):
+        def __call__(self, obs: dict):
+            return (
+                jnp.asarray(obs["ems_embeddings"], dtype=jnp.float32),
+                jnp.asarray(obs["item_embeddings"], dtype=jnp.float32),
+                jnp.asarray(obs["ems_mask"], dtype=jnp.bool_),
+                jnp.asarray(obs["item_mask"], dtype=jnp.bool_),
+            )
+
+    class DummyTorso(nnx.Module):
+        def __call__(self, ems_embeddings, item_embeddings, ems_mask, item_mask):
+            del ems_mask, item_mask
+            return ems_embeddings, item_embeddings
+
+    class DummyActorHead(nnx.Module):
+        def __call__(self, ems_embeddings, item_embeddings, action_mask):
+            del ems_embeddings, item_embeddings
+            return jnp.zeros(action_mask.shape, dtype=jnp.float32)
+
+    class DummyCriticHead(nnx.Module):
+        def __call__(self, ems_embeddings, item_embeddings, ems_mask, item_mask):
+            del item_embeddings, ems_mask, item_mask
+            return jnp.zeros((ems_embeddings.shape[0],), dtype=jnp.float32)
+
+    model = ModularPolicyValueModel(
+        input_adapter=DummyInputAdapter(),
+        shared_torso=DummyTorso(),
+        actor_head=DummyActorHead(),
+        critic_head=DummyCriticHead(),
+    )
+    graphdef, state = nnx.split(model)
+
+    obs = {
+        "ems_embeddings": jnp.ones((2, 10, 8), dtype=jnp.float32),
+        "item_embeddings": jnp.ones((2, 30, 8), dtype=jnp.float32),
+        "ems_mask": jnp.ones((2, 10), dtype=jnp.bool_),
+        "item_mask": jnp.ones((2, 30), dtype=jnp.bool_),
+        "action_mask": jnp.ones((2, 300), dtype=jnp.bool_),
+    }
+    dist, values = policy_value_apply(graphdef, state, obs)
+
+    assert isinstance(dist, CategoricalPolicyDist)
+    assert values.shape == (2,)
 
 
 def test_binpack_transformer_forward_shapes():

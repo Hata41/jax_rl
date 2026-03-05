@@ -31,7 +31,7 @@ def _matches_module_prefix(path, module_prefixes: tuple[str, ...]) -> bool:
 
 
 def _zero_out_except_module(tree, module_prefixes: tuple[str, ...]):
-    known_prefixes = ("actor_", "critic_", "shared_")
+    known_prefixes = ("actor_", "critic_", "shared_", "input_adapter")
 
     def _validate_prefixes(path, leaf):
         del leaf
@@ -156,7 +156,7 @@ def ppo_update(
             grads = jax.lax.pmean(grads, axis_name="device")
             actor_grads = _zero_out_except_module(
                 grads,
-                module_prefixes=("actor_", "shared_"),
+                module_prefixes=("actor_", "shared_", "input_adapter"),
             )
             critic_grads = _zero_out_except_module(
                 grads,

@@ -108,6 +108,59 @@ def _make_rustpool_env(env_name: str, num_envs_per_device: int, env_kwargs: dict
     return env, None
 
 
+@register_env("rlpallet")
+def _make_rlpallet_env(env_name: str, num_envs_per_device: int, env_kwargs: dict[str, Any]):
+    task_id = env_name.split(":", 1)[1]
+
+    import jax
+    import numpy as np
+    import rlpallet
+    from rustpool.envpool_api.stoa_wrapper import StoaRustpoolWrapper
+
+    class StoaRlpalletWrapper(StoaRustpoolWrapper):
+        def __init__(self, task_id: str, num_envs_per_device: int, **kwargs: Any):
+            self.task_id = task_id
+            self.num_envs_per_device = int(num_envs_per_device)
+            self.n_devices = len(jax.devices())
+
+            self._step_type_first = self._step_type_value("FIRST", 0)
+            self._step_type_mid = self._step_type_value("MID", 1)
+            self._step_type_last = self._step_type_value("LAST", 2)
+
+            base_seed = kwargs.pop("seed", 0)
+
+            self.sharded_pools = [
+                rlpallet.make(
+                    task_id,
+                    num_envs=self.num_envs_per_device,
+                    batch_size=self.num_envs_per_device,
+                    seed=base_seed + (device_index * 10000),
+                    **kwargs,
+                )
+                for device_index in range(self.n_devices)
+            ]
+
+            self._env_ids_by_device: list[np.ndarray | None] = [None] * self.n_devices
+
+            self.dummy_state_struct = jax.ShapeDtypeStruct(
+                (self.num_envs_per_device,), jnp.int32
+            )
+            self._state_ids_struct = jax.ShapeDtypeStruct(
+                (self.num_envs_per_device,), jnp.int32
+            )
+
+            self._build_structs_from_probe()
+
+    env = StoaRlpalletWrapper(
+        task_id=task_id,
+        num_envs_per_device=num_envs_per_device,
+        **env_kwargs,
+    )
+    env = RustpoolObsWrapper(env)
+    env = BatchedRecordEpisodeMetrics(env)
+    return env, None
+
+
 @register_env("jaxpallet")
 def _make_jaxpallet_env(env_name: str, num_envs_per_device: int, env_kwargs: dict[str, Any]):
     preset = env_name.split(":", 1)[1]

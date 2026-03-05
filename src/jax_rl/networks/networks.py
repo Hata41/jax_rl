@@ -254,14 +254,10 @@ class BinPackTorso(nnx.Module):
         hidden_dim: int,
         num_heads: int,
         num_layers: int,
-        ems_feature_dim: int,
-        item_feature_dim: int,
         rngs: nnx.Rngs,
     ):
         self.hidden_dim = int(hidden_dim)
         self.num_layers = int(num_layers)
-        self.ems_embed = _linear(int(ems_feature_dim), self.hidden_dim, scale=jnp.sqrt(2.0), rngs=rngs)
-        self.item_embed = _linear(int(item_feature_dim), self.hidden_dim, scale=jnp.sqrt(2.0), rngs=rngs)
         self.ems_self_blocks = nnx.List(
             [TransformerBlock(dim=hidden_dim, num_heads=num_heads, rngs=rngs) for _ in range(num_layers)]
         )
@@ -275,15 +271,13 @@ class BinPackTorso(nnx.Module):
             [TransformerBlock(dim=hidden_dim, num_heads=num_heads, rngs=rngs) for _ in range(num_layers)]
         )
 
-    def __call__(self, obs: dict) -> tuple[Array, Array, Array, Array]:
-        ems_pos = jnp.asarray(obs["ems_pos"], dtype=jnp.float32)
-        item_dims = jnp.asarray(obs["item_dims"], dtype=jnp.float32)
-        ems_mask = jnp.asarray(obs["ems_mask"], dtype=jnp.bool_)
-        item_mask = jnp.asarray(obs["item_mask"], dtype=jnp.bool_)
-
-        ems_embeddings = self.ems_embed(ems_pos)
-        item_embeddings = self.item_embed(item_dims)
-
+    def __call__(
+        self,
+        ems_embeddings: Array,
+        item_embeddings: Array,
+        ems_mask: Array,
+        item_mask: Array,
+    ) -> tuple[Array, Array]:
         ems_self_mask = _pair_mask(ems_mask, ems_mask)
         items_self_mask = _pair_mask(item_mask, item_mask)
         ems_cross_mask = _pair_mask(ems_mask, item_mask)
@@ -315,7 +309,204 @@ class BinPackTorso(nnx.Module):
                 items_cross_mask,
             )
 
+        return ems_embeddings, item_embeddings
+
+
+class RustpalletInputAdapterV1(nnx.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        ems_feature_dim: int,
+        item_feature_dim: int,
+        rngs: nnx.Rngs,
+    ):
+        self.ems_embed = _linear(int(ems_feature_dim), int(hidden_dim), scale=jnp.sqrt(2.0), rngs=rngs)
+        self.item_embed = _linear(int(item_feature_dim), int(hidden_dim), scale=jnp.sqrt(2.0), rngs=rngs)
+
+    def __call__(self, obs: dict) -> tuple[Array, Array, Array, Array]:
+        ems_pos = jnp.asarray(obs["ems_pos"], dtype=jnp.float32)
+        item_dims = jnp.asarray(obs["item_dims"], dtype=jnp.float32)
+        ems_mask = jnp.asarray(obs["ems_mask"], dtype=jnp.bool_)
+        item_mask = jnp.asarray(obs["item_mask"], dtype=jnp.bool_)
+
+        ems_embeddings = self.ems_embed(ems_pos)
+        item_embeddings = self.item_embed(item_dims)
         return ems_embeddings, item_embeddings, ems_mask, item_mask
+
+
+class RustpalletInputAdapterV2(nnx.Module):
+    def __init__(self, d_model: int, rngs: nnx.Rngs):
+        self.d_model = int(d_model)
+        self.num_rotations = 6
+        self.ems_proj = nnx.Linear(6, self.d_model, rngs=rngs)
+        self.item_proj = nnx.Linear(9 + self.d_model, self.d_model, rngs=rngs)
+
+    def _get_sinusoidal_encoding(self, x: jax.Array) -> jax.Array:
+        x = jnp.asarray(x, dtype=jnp.float32)
+        div_term = jnp.exp(
+            jnp.arange(0, self.d_model, 2, dtype=jnp.float32)
+            * (-(jnp.log(10000.0) / max(float(self.d_model), 1.0)))
+        )
+        phase = x * div_term
+        encoding = jnp.concatenate([jnp.sin(phase), jnp.cos(phase)], axis=-1)
+        current_dim = int(encoding.shape[-1])
+        if current_dim > self.d_model:
+            return encoding[..., : self.d_model]
+        if current_dim < self.d_model:
+            pad_width = [(0, 0)] * encoding.ndim
+            pad_width[-1] = (0, self.d_model - current_dim)
+            return jnp.pad(encoding, pad_width, mode="constant")
+        return encoding
+
+    def __call__(self, obs: dict) -> tuple[Array, Array, Array, Array]:
+        eps = jnp.asarray(1e-6, dtype=jnp.float32)
+
+        uld_dims = jnp.asarray(obs["uld_dims"], dtype=jnp.float32)
+        max_weight = jnp.asarray(obs["max_weight"], dtype=jnp.float32)
+
+        ems_dims = jnp.asarray(obs["ems_dims"], dtype=jnp.float32)
+        ems_pos = jnp.asarray(obs["ems_pos"], dtype=jnp.float32)
+        item_dims = jnp.asarray(obs["item_dims"], dtype=jnp.float32)
+        item_pos = jnp.asarray(obs["item_pos"], dtype=jnp.float32)
+        item_weights = jnp.asarray(obs["item_weights"], dtype=jnp.float32)
+
+        ems_mask = jnp.asarray(obs["ems_mask"], dtype=jnp.bool_)
+        item_mask = jnp.asarray(obs["item_mask"], dtype=jnp.bool_)
+
+        safe_uld_dims = jnp.maximum(uld_dims, eps)
+        safe_max_weight = jnp.maximum(max_weight, eps)
+
+        norm_ems_dims = ems_dims / safe_uld_dims[:, None, :]
+        norm_ems_pos = ems_pos / safe_uld_dims[:, None, :]
+        ems_features = jnp.concatenate([norm_ems_dims, norm_ems_pos], axis=-1)
+
+        norm_item_dims = item_dims / safe_uld_dims[:, None, :]
+        norm_item_pos = item_pos / safe_uld_dims[:, None, :]
+        norm_item_weights = item_weights / safe_max_weight[:, None]
+
+        group_counts = jnp.asarray(obs.get("group_counts", jnp.ones_like(item_weights)), dtype=jnp.float32)
+        group_counts_exp = jnp.expand_dims(group_counts, axis=-1)
+        log_counts = jnp.log1p(group_counts_exp)
+        sin_enc = self._get_sinusoidal_encoding(group_counts_exp)
+        is_last = (group_counts_exp == 1).astype(jnp.float32)
+
+        permutations = [
+            (0, 1, 2),
+            (0, 2, 1),
+            (1, 0, 2),
+            (1, 2, 0),
+            (2, 0, 1),
+            (2, 1, 0),
+        ]
+        permuted_item_dims = jnp.stack(
+            [norm_item_dims[..., jnp.asarray(order, dtype=jnp.int32)] for order in permutations],
+            axis=2,
+        )
+
+        non_dim_item_features = jnp.concatenate(
+            [
+                norm_item_pos,
+                jnp.expand_dims(norm_item_weights, axis=-1),
+                log_counts,
+                sin_enc,
+                is_last,
+            ],
+            axis=-1,
+        )
+        repeated_non_dim = jnp.repeat(
+            jnp.expand_dims(non_dim_item_features, axis=2),
+            repeats=self.num_rotations,
+            axis=2,
+        )
+        item_features = jnp.concatenate([permuted_item_dims, repeated_non_dim], axis=-1)
+
+        batch_size = int(item_features.shape[0])
+        num_items = int(item_features.shape[1])
+        flat_item_features = item_features.reshape((batch_size, num_items * self.num_rotations, -1))
+
+        expanded_item_mask = jnp.repeat(item_mask[..., None], self.num_rotations, axis=-1).reshape(
+            (batch_size, num_items * self.num_rotations)
+        )
+
+        ems_embeddings = self.ems_proj(ems_features)
+        item_embeddings = self.item_proj(flat_item_features)
+        return ems_embeddings, item_embeddings, ems_mask, expanded_item_mask
+
+
+class BinPackActorHead(nnx.Module):
+    def __init__(self, hidden_dim: int, num_rotations: int = 6, rngs: nnx.Rngs | None = None):
+        if rngs is None:
+            raise ValueError("rngs is required to initialize BinPackActorHead.")
+        self.num_rotations = int(num_rotations)
+        self.actor_proj = _linear(int(hidden_dim), int(hidden_dim), scale=0.01, rngs=rngs)
+
+    def __call__(self, ems_embeddings: Array, item_embeddings: Array, action_mask: Array) -> Array:
+        items_projected = self.actor_proj(item_embeddings)
+        score_grid = jnp.matmul(ems_embeddings, jnp.transpose(items_projected, (0, 2, 1)))
+
+        action_mask = jnp.asarray(action_mask, dtype=jnp.bool_)
+        num_actions = int(action_mask.shape[-1])
+        num_ems = int(score_grid.shape[1])
+        token_count = int(score_grid.shape[2])
+
+        if (
+            token_count % self.num_rotations == 0
+            and token_count * num_ems == num_actions
+        ):
+            num_items = token_count // self.num_rotations
+            score_grid_4d = score_grid.reshape(
+                (score_grid.shape[0], num_ems, num_items, self.num_rotations)
+            )
+            logits = jnp.transpose(score_grid_4d, (0, 2, 1, 3)).reshape((score_grid.shape[0], -1))
+        else:
+            logits = _flatten_binpack_logits(score_grid, action_mask)
+
+        return jnp.where(action_mask, logits, jnp.asarray(-1e9, dtype=logits.dtype))
+
+
+class BinPackCriticHead(nnx.Module):
+    def __init__(self, hidden_dim: int, rngs: nnx.Rngs):
+        self.critic_head = _linear(int(hidden_dim) * 2, 1, scale=1.0, rngs=rngs)
+
+    def __call__(
+        self,
+        ems_embeddings: Array,
+        item_embeddings: Array,
+        ems_mask: Array,
+        item_mask: Array,
+    ) -> Array:
+        pooled_ems = _masked_mean(ems_embeddings, ems_mask)
+        pooled_items = _masked_mean(item_embeddings, item_mask)
+        critic_features = jnp.concatenate([pooled_ems, pooled_items], axis=-1)
+        return self.critic_head(critic_features).squeeze(-1)
+
+
+class ModularPolicyValueModel(nnx.Module):
+    def __init__(
+        self,
+        input_adapter: nnx.Module,
+        shared_torso: nnx.Module,
+        actor_head: nnx.Module,
+        critic_head: nnx.Module,
+    ):
+        self.input_adapter = input_adapter
+        self.shared_torso = shared_torso
+        self.actor_head = actor_head
+        self.critic_head = critic_head
+
+    def __call__(self, obs: dict):
+        ems_embeddings, item_embeddings, ems_mask, item_mask = self.input_adapter(obs)
+        ems_embeddings, item_embeddings = self.shared_torso(
+            ems_embeddings,
+            item_embeddings,
+            ems_mask,
+            item_mask,
+        )
+
+        action_mask = jnp.asarray(obs["action_mask"], dtype=jnp.bool_)
+        logits = self.actor_head(ems_embeddings, item_embeddings, action_mask)
+        values = self.critic_head(ems_embeddings, item_embeddings, ems_mask, item_mask)
+        return logits, values
 
 
 class BinPackPolicyValueModel(nnx.Module):
@@ -330,30 +521,33 @@ class BinPackPolicyValueModel(nnx.Module):
         rngs: nnx.Rngs,
     ):
         self.action_dim = int(action_dim)
-        self.shared_torso = BinPackTorso(
+        self.input_adapter = RustpalletInputAdapterV1(
             hidden_dim=hidden_dim,
-            num_heads=num_heads,
-            num_layers=num_layers,
             ems_feature_dim=ems_feature_dim,
             item_feature_dim=item_feature_dim,
             rngs=rngs,
         )
-        self.actor_proj = _linear(hidden_dim, hidden_dim, scale=0.01, rngs=rngs)
-        self.critic_head = _linear(hidden_dim * 2, 1, scale=1.0, rngs=rngs)
+        self.shared_torso = BinPackTorso(
+            hidden_dim=hidden_dim,
+            num_heads=num_heads,
+            num_layers=num_layers,
+            rngs=rngs,
+        )
+        self.actor_head = BinPackActorHead(hidden_dim=hidden_dim, num_rotations=6, rngs=rngs)
+        self.critic_head = BinPackCriticHead(hidden_dim=hidden_dim, rngs=rngs)
 
     def __call__(self, obs: dict):
-        ems_embeddings, item_embeddings, ems_mask, item_mask = self.shared_torso(obs)
+        ems_embeddings, item_embeddings, ems_mask, item_mask = self.input_adapter(obs)
+        ems_embeddings, item_embeddings = self.shared_torso(
+            ems_embeddings,
+            item_embeddings,
+            ems_mask,
+            item_mask,
+        )
 
-        items_projected = self.actor_proj(item_embeddings)
-        score_grid = jnp.matmul(ems_embeddings, jnp.transpose(items_projected, (0, 2, 1)))
         action_mask = jnp.asarray(obs["action_mask"], dtype=jnp.bool_)
-        logits = _flatten_binpack_logits(score_grid, action_mask)
-        logits = jnp.where(action_mask, logits, jnp.asarray(-1e9, dtype=logits.dtype))
-
-        pooled_ems = _masked_mean(ems_embeddings, ems_mask)
-        pooled_items = _masked_mean(item_embeddings, item_mask)
-        critic_features = jnp.concatenate([pooled_ems, pooled_items], axis=-1)
-        values = self.critic_head(critic_features).squeeze(-1)
+        logits = self.actor_head(ems_embeddings, item_embeddings, action_mask)
+        values = self.critic_head(ems_embeddings, item_embeddings, ems_mask, item_mask)
         return logits, values
 
 
@@ -411,6 +605,75 @@ def _distribution_from_logits(logits):
     return CategoricalPolicyDist(logits=logits)
 
 
+def _instantiate_target_tree(
+    config: object,
+    shared_rngs: nnx.Rngs,
+    runtime_values: Mapping[str, object] | None = None,
+) -> object:
+    if isinstance(config, list):
+        return [_instantiate_target_tree(value, shared_rngs, None) for value in config]
+
+    if not isinstance(config, Mapping):
+        return config
+
+    if "_target_" not in config:
+        return {
+            key: _instantiate_target_tree(value, shared_rngs, None)
+            for key, value in config.items()
+            if key != "_delete_"
+        }
+
+    target = config.get("_target_")
+    if not isinstance(target, str) or not target.strip():
+        raise NetworkTargetResolutionError(
+            "Invalid network sub-config: missing or empty '_target_' key."
+        )
+
+    try:
+        target_cls = hydra.utils.get_class(target)
+    except Exception as exc:
+        raise NetworkTargetResolutionError(
+            f"Invalid nested '_target_' value '{target}': could not resolve import path."
+        ) from exc
+
+    constructor_sig = inspect.signature(target_cls.__init__)
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in constructor_sig.parameters.values()
+    )
+
+    kwargs = {
+        key: _instantiate_target_tree(value, shared_rngs, None)
+        for key, value in config.items()
+        if not key.startswith("_") and (accepts_kwargs or key in constructor_sig.parameters)
+    }
+    if "rngs" not in kwargs and (accepts_kwargs or "rngs" in constructor_sig.parameters):
+        kwargs["rngs"] = shared_rngs
+
+    if runtime_values is not None:
+        runtime_kwargs = {
+            name: value
+            for name, value in runtime_values.items()
+            if value is not None and name not in kwargs
+            and (accepts_kwargs or name in constructor_sig.parameters)
+        }
+        kwargs.update(runtime_kwargs)
+
+    instantiate_config = {key: value for key, value in config.items() if key.startswith("_")}
+    instantiate_config = {key: value for key, value in instantiate_config.items() if key != "_delete_"}
+    if instantiate_config.get("_partial_"):
+        raise NetworkTargetResolutionError(
+            "Network configs with '_partial_=True' are not supported for model instantiation."
+        )
+    try:
+        return target_cls(**kwargs)
+    except Exception as exc:
+        raise NetworkTargetResolutionError(
+            "Failed to instantiate network target from config tree. "
+            f"target='{target}'."
+        ) from exc
+
+
 def init_policy_value_params(
     key: Array,
     network_config: Mapping[str, object],
@@ -439,49 +702,25 @@ def init_policy_value_params(
             f"Invalid 'network._target_' value '{target}': could not resolve import path."
         ) from exc
 
-    constructor_sig = inspect.signature(model_cls.__init__)
-    accepts_kwargs = any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in constructor_sig.parameters.values()
-    )
+    shared_rngs = nnx.Rngs(key)
     runtime_values = {
         "obs_dim": int(obs_dim),
         "action_dims": action_dims,
         "action_dim": int(action_dims) if isinstance(action_dims, int) else None,
         "ems_feature_dim": int(ems_feature_dim),
         "item_feature_dim": int(item_feature_dim),
-        "rngs": nnx.Rngs(key),
-    }
-    instantiate_kwargs = {
-        name: value
-        for name, value in runtime_values.items()
-        if value is not None
-        and (accepts_kwargs or name in constructor_sig.parameters)
-    }
-    filtered_network_config = {
-        key: value
-        for key, value in network_config.items()
-        if key != "_delete_"
-        and (key.startswith("_") or accepts_kwargs or key in constructor_sig.parameters)
+        "rngs": shared_rngs,
     }
     try:
-        model_factory = hydra.utils.instantiate(
-            filtered_network_config,
-            _partial_=True,
-            _convert_="all",
+        model = _instantiate_target_tree(
+            config={key: value for key, value in network_config.items() if key != "_delete_"},
+            shared_rngs=shared_rngs,
+            runtime_values=runtime_values,
         )
     except Exception as exc:
         raise NetworkTargetResolutionError(
             "Failed to instantiate network from config. "
             f"target='{target}'."
-        ) from exc
-
-    try:
-        model = model_factory(**instantiate_kwargs)
-    except Exception as exc:
-        raise NetworkTargetResolutionError(
-            "Failed to construct network instance from instantiated factory. "
-            f"target='{target}', runtime_kwargs={sorted(instantiate_kwargs.keys())}."
         ) from exc
 
     if not isinstance(model, nnx.Module):

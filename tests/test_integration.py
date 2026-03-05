@@ -13,7 +13,7 @@ from jax_rl.configs.config import (
     LoggingConfig,
     SystemConfig,
 )
-from jax_rl.envs.env import make_stoa_env
+from jax_rl.envs.env import BatchedRecordEpisodeMetrics, RustpoolObsWrapper, make_stoa_env
 from jax_rl.networks import init_policy_value_params, policy_value_apply
 from jax_rl.systems.ppo.anakin.system import train
 from jax_rl.systems.ppo.rollout import collect_rollout
@@ -63,6 +63,22 @@ def test_rustpool_obs_keys_are_canonicalized():
     assert "ems_pos" in next_obs
     assert "item_dims" in next_obs
     assert "item_mask" in next_obs
+
+
+def test_rlpallet_env_routing_and_wrapping():
+    pytest.importorskip("rlpallet")
+    pytest.importorskip("rustpool")
+
+    env, env_params = make_stoa_env(
+        "rlpallet:UldEnv-v2",
+        num_envs_per_device=2,
+        env_kwargs={"max_items": 10},
+    )
+    assert env_params is None
+    assert isinstance(env, BatchedRecordEpisodeMetrics)
+    assert isinstance(env._env, RustpoolObsWrapper)
+
+    _state, _timestep = env.reset(jax.random.PRNGKey(0))
 
 
 class _MockBatchedEnv:
