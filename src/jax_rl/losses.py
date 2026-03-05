@@ -12,6 +12,24 @@ def ppo_loss(
     value_coef: float,
     entropy_coef: float,
 ):
+    """Compute the clipped PPO objective with value clipping and entropy regularization.
+
+    The policy objective uses
+
+    ``L^CLIP = E[min(r_t(θ) A_t, clip(r_t(θ), 1-ε, 1+ε) A_t)]``
+
+    where ``r_t(θ)=π_θ(a_t|s_t)/π_{θ_old}(a_t|s_t)`` and ``ε=clip_epsilon``.
+
+    The critic term uses clipped value regression:
+
+    ``V^clip_t = V_old_t + clip(V_t - V_old_t, -ε, ε)``
+
+    and ``L^VF = 0.5 * E[max((V_t - R_t)^2, (V^clip_t - R_t)^2)]``.
+
+    The final minimized loss is
+
+    ``L = -L^CLIP + value_coef * L^VF - entropy_coef * H[π_θ]``.
+    """
     dist, new_values = policy_value_apply(graphdef, state, batch.obs)
     new_log_probs = dist.log_prob(batch.actions)
 

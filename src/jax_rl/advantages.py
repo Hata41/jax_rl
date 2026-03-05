@@ -14,6 +14,20 @@ def compute_gae(
     gae_lambda: float,
     bootstrap_values: Array | None = None,
 ):
+    """Compute Generalized Advantage Estimation (GAE) and returns.
+
+    For each timestep ``t``, this computes temporal-difference residuals
+
+    ``δ_t = r_t + γ * V_{t+1} * (1 - terminated_t) - V_t``
+
+    and discounted advantage recursion
+
+    ``A_t = δ_t + γ * λ * (1 - terminated_t) * A_{t+1}``.
+
+    ``gamma`` controls discounting horizon, while ``gae_lambda`` controls
+    bias-variance tradeoff between one-step TD (low λ) and Monte Carlo-like
+    estimates (high λ).
+    """
     dtype = values.dtype
     rewards = rewards.astype(dtype)
     values = values.astype(dtype)

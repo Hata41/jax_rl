@@ -1,5 +1,5 @@
 import inspect
-from typing import Any, Mapping, NamedTuple, Sequence
+from typing import Mapping, NamedTuple, Sequence
 
 import distrax
 import hydra
@@ -7,10 +7,14 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
+from .exceptions import NetworkTargetResolutionError
 from .types import Array, PolicyValueParams
 
 
-def _flatten_leaf_with_batch_ndim(leaf: Any, batch_ndim: int) -> Array:
+ObservationInput = Mapping[str, Array] | Array
+
+
+def _flatten_leaf_with_batch_ndim(leaf: object, batch_ndim: int) -> Array:
     arr = jnp.asarray(leaf, dtype=jnp.float32)
     if batch_ndim <= 0:
         return arr.reshape((-1,))
@@ -18,8 +22,18 @@ def _flatten_leaf_with_batch_ndim(leaf: Any, batch_ndim: int) -> Array:
     return arr.reshape(leading_shape + (-1,))
 
 
-def flatten_observation_features(obs: Any, batch_ndim: int | None = None) -> tuple[Array, Array | None]:
-    if isinstance(obs, dict):
+def flatten_observation_features(
+    obs: ObservationInput,
+    batch_ndim: int | None = None,
+) -> tuple[Array, Array | None]:
+    """Flatten observation leaves into feature vectors while preserving batch axes.
+
+    For mapping observations, all leaves except ``action_mask`` are flattened and
+    concatenated on the last dimension. If ``batch_ndim=1`` and leaves have shape
+    ``[B, ...]``, the output has shape ``[B, F]`` where ``F`` is the sum of per-leaf
+    flattened sizes. For non-mapping observations, the tensor is flattened similarly.
+    """
+    if isinstance(obs, Mapping):
         action_mask = obs.get("action_mask")
         obs_without_mask = {key: value for key, value in obs.items() if key != "action_mask"}
         leaves, _ = jax.tree_util.tree_flatten(obs_without_mask)
@@ -208,6 +222,19 @@ def _masked_mean(x: Array, mask: Array) -> Array:
 
 
 def _flatten_binpack_logits(score_grid: Array, action_mask: Array) -> Array:
+    """Flatten item/EMS scores into action logits with rotation expansion.
+
+    Args:
+        score_grid: Pairwise score tensor of shape ``[B, E, I]`` where ``E`` is EMS
+            count and ``I`` is item count.
+        action_mask: Boolean mask with shape ``[B, A]`` where
+            ``A = I * E * R`` for ``R`` rotations.
+
+    Returns:
+        Flattened logits of shape ``[B, I * E * R]`` by transposing to
+        ``[B, I, E]``, adding a singleton rotation axis, tiling over rotations,
+        then reshaping.
+    """
     score_grid = jnp.transpose(score_grid, (0, 2, 1))
     score_grid = jnp.expand_dims(score_grid, axis=-1)
 
@@ -375,21 +402,21 @@ def _distribution_from_logits(logits):
 
 def init_policy_value_params(
     key: Array,
-    network_config: Mapping[str, Any],
+    network_config: Mapping[str, object],
     obs_dim: int,
     action_dims: int | Sequence[int],
     ems_feature_dim: int = 6,
     item_feature_dim: int = 3,
 ) -> PolicyValueParams:
     if not isinstance(network_config, Mapping):
-        raise ValueError(
+        raise NetworkTargetResolutionError(
             "Invalid 'network' config: expected a mapping with a '_target_' field, "
             f"got {type(network_config).__name__}."
         )
 
     target = network_config.get("_target_")
     if not isinstance(target, str) or not target.strip():
-        raise ValueError(
+        raise NetworkTargetResolutionError(
             "Invalid 'network' config: missing or empty '_target_' key. "
             "Define the model class path in training.network._target_."
         )
@@ -397,7 +424,7 @@ def init_policy_value_params(
     try:
         model_cls = hydra.utils.get_class(target)
     except Exception as exc:
-        raise ValueError(
+        raise NetworkTargetResolutionError(
             f"Invalid 'network._target_' value '{target}': could not resolve import path."
         ) from exc
 
@@ -423,7 +450,7 @@ def init_policy_value_params(
     try:
         model_factory = hydra.utils.instantiate(network_config, _partial_=True, _convert_="all")
     except Exception as exc:
-        raise ValueError(
+        raise NetworkTargetResolutionError(
             "Failed to instantiate network from config. "
             f"target='{target}'."
         ) from exc
@@ -431,13 +458,13 @@ def init_policy_value_params(
     try:
         model = model_factory(**instantiate_kwargs)
     except Exception as exc:
-        raise ValueError(
+        raise NetworkTargetResolutionError(
             "Failed to construct network instance from instantiated factory. "
             f"target='{target}', runtime_kwargs={sorted(instantiate_kwargs.keys())}."
         ) from exc
 
     if not isinstance(model, nnx.Module):
-        raise ValueError(
+        raise NetworkTargetResolutionError(
             f"Configured network target '{target}' must instantiate to a flax.nnx.Module, "
             f"got {type(model).__name__}."
         )

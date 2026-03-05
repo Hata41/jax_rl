@@ -7,6 +7,7 @@ from dataclasses import asdict
 from .checkpoint import Checkpointer
 from .config import PPOConfig
 from .env import make_stoa_env
+from .exceptions import ConfigDivisibilityError
 from .eval import evaluate
 from .logging import extract_completed_episode_metrics, jaxRL_Logger
 from .networks import flatten_observation_features, init_policy_value_params
@@ -102,7 +103,7 @@ def _space_feature_dim(obs_space, key: str, default: int) -> int:
 
 def train(config: PPOConfig):
     if config.rollout_batch_size % config.minibatch_size != 0:
-        raise ValueError(
+        raise ConfigDivisibilityError(
             "minibatch_size must divide num_envs * num_steps, "
             f"got {config.minibatch_size} and {config.rollout_batch_size}."
         )
@@ -111,12 +112,12 @@ def train(config: PPOConfig):
 
     num_devices = config.local_device_count
     if config.num_envs % num_devices != 0:
-        raise ValueError(
+        raise ConfigDivisibilityError(
             "num_envs must be divisible by local device count, "
             f"got num_envs={config.num_envs} and num_devices={num_devices}."
         )
     if config.minibatch_size % num_devices != 0:
-        raise ValueError(
+        raise ConfigDivisibilityError(
             "minibatch_size must be divisible by local device count, "
             f"got minibatch_size={config.minibatch_size} and num_devices={num_devices}."
         )

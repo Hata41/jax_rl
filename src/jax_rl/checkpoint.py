@@ -5,6 +5,7 @@ from typing import Any
 import jax
 import orbax.checkpoint as ocp
 
+from .exceptions import CheckpointRestoreError
 from .types import PolicyValueParams, TrainState
 
 
@@ -54,51 +55,26 @@ class Checkpointer:
         template_train_state: TrainState | None = None,
         template_key=None,
     ) -> dict[str, Any]:
+        """Restore training state from an explicit path or this manager's directory."""
         template_items = None
         if template_train_state is not None:
             template_items = {"train_state": template_train_state, "key": template_key}
 
         if checkpoint_path is not None:
-            target = Path(checkpoint_path)
-            if not target.exists():
-                raise FileNotFoundError(f"Checkpoint path does not exist: {checkpoint_path}")
-            if not target.is_dir():
-                raise FileNotFoundError(
-                    f"Checkpoint path must be a directory: {checkpoint_path}"
-                )
-            direct_step = target.name.isdigit() and timestep is None
-            if direct_step:
-                step = int(target.name)
-                if template_items is not None:
-                    restored = self._checkpointer.restore(str(target), item=template_items)
-                else:
-                    restored = self._checkpointer.restore(str(target))
-                metadata = {}
-            else:
-                temp_manager = ocp.CheckpointManager(
-                    str(target),
-                    self._checkpointer,
-                    options=self._options,
-                )
-                step = int(timestep) if timestep is not None else temp_manager.latest_step()
-                if step is None:
-                    raise FileNotFoundError(f"No checkpoints found in: {checkpoint_path}")
-                if template_items is not None:
-                    restored = temp_manager.restore(step, items=template_items)
-                else:
-                    restored = temp_manager.restore(step)
-                metadata = temp_manager.metadata() if hasattr(temp_manager, "metadata") else {}
+            restored_payload = self._restore_from_explicit_path(
+                target=Path(checkpoint_path),
+                timestep=timestep,
+                template_items=template_items,
+            )
         else:
-            step = int(timestep) if timestep is not None else self._manager.latest_step()
-            if step is None:
-                raise FileNotFoundError(
-                    f"No checkpoints found in manager directory: {self._checkpoint_dir}"
-                )
-            if template_items is not None:
-                restored = self._manager.restore(step, items=template_items)
-            else:
-                restored = self._manager.restore(step)
-            metadata = self._manager.metadata() if hasattr(self._manager, "metadata") else {}
+            restored_payload = self._restore_from_manager(
+                timestep=timestep,
+                template_items=template_items,
+            )
+
+        restored = restored_payload["items"]
+        step = restored_payload["step"]
+        metadata = restored_payload["metadata"]
 
         train_state = self._coerce_train_state(restored["train_state"])
         key = restored["key"]
@@ -111,6 +87,58 @@ class Checkpointer:
             "key": key,
             "metadata": metadata,
         }
+
+    def _restore_from_explicit_path(
+        self,
+        target: Path,
+        timestep: int | None,
+        template_items: dict[str, object] | None,
+    ) -> dict[str, object]:
+        if not target.exists():
+            raise CheckpointRestoreError(f"Checkpoint path does not exist: {target}")
+        if not target.is_dir():
+            raise CheckpointRestoreError(f"Checkpoint path must be a directory: {target}")
+
+        direct_step = target.name.isdigit() and timestep is None
+        if direct_step:
+            step = int(target.name)
+            if template_items is not None:
+                restored = self._checkpointer.restore(str(target), item=template_items)
+            else:
+                restored = self._checkpointer.restore(str(target))
+            return {"step": step, "items": restored, "metadata": {}}
+
+        temp_manager = ocp.CheckpointManager(
+            str(target),
+            self._checkpointer,
+            options=self._options,
+        )
+        step = int(timestep) if timestep is not None else temp_manager.latest_step()
+        if step is None:
+            raise CheckpointRestoreError(f"No checkpoints found in: {target}")
+        if template_items is not None:
+            restored = temp_manager.restore(step, items=template_items)
+        else:
+            restored = temp_manager.restore(step)
+        metadata = temp_manager.metadata() if hasattr(temp_manager, "metadata") else {}
+        return {"step": int(step), "items": restored, "metadata": metadata}
+
+    def _restore_from_manager(
+        self,
+        timestep: int | None,
+        template_items: dict[str, object] | None,
+    ) -> dict[str, object]:
+        step = int(timestep) if timestep is not None else self._manager.latest_step()
+        if step is None:
+            raise CheckpointRestoreError(
+                f"No checkpoints found in manager directory: {self._checkpoint_dir}"
+            )
+        if template_items is not None:
+            restored = self._manager.restore(step, items=template_items)
+        else:
+            restored = self._manager.restore(step)
+        metadata = self._manager.metadata() if hasattr(self._manager, "metadata") else {}
+        return {"step": int(step), "items": restored, "metadata": metadata}
 
     def latest_step(self) -> int | None:
         latest = self._manager.latest_step()
@@ -125,12 +153,12 @@ class Checkpointer:
     @staticmethod
     def _validate_train_state(train_state: Any) -> None:
         if not isinstance(train_state, TrainState):
-            raise TypeError(
+            raise CheckpointRestoreError(
                 "Restored train_state is not a TrainState PyTree; "
                 f"got {type(train_state)}"
             )
         if not isinstance(train_state.params, PolicyValueParams):
-            raise TypeError(
+            raise CheckpointRestoreError(
                 "Restored TrainState params do not match expected PolicyValueParams layout"
             )
 
@@ -142,21 +170,21 @@ class Checkpointer:
             )
         )
         if params_treedef != expected_treedef:
-            raise TypeError("Restored TrainState parameter tree structure does not match")
+            raise CheckpointRestoreError("Restored TrainState parameter tree structure does not match")
 
     @staticmethod
     def _coerce_train_state(payload: Any) -> TrainState:
         if isinstance(payload, TrainState):
             return payload
         if not isinstance(payload, dict):
-            raise TypeError(
+            raise CheckpointRestoreError(
                 "Restored train_state payload must be TrainState or dict; "
                 f"got {type(payload)}"
             )
         required = {"params", "actor_opt_state", "critic_opt_state"}
         missing = required - set(payload.keys())
         if missing:
-            raise TypeError(
+            raise CheckpointRestoreError(
                 "Restored train_state payload is missing required keys: "
                 + ", ".join(sorted(missing))
             )
@@ -170,7 +198,7 @@ class Checkpointer:
                 state=params_payload["state"],
             )
         else:
-            raise TypeError("Restored train_state params do not match expected structure")
+            raise CheckpointRestoreError("Restored train_state params do not match expected structure")
 
         return TrainState(
             params=params,

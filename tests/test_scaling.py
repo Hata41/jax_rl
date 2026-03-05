@@ -9,6 +9,7 @@ import optax
 import pytest
 
 from jax_rl.config import PPOConfig
+from jax_rl.exceptions import ConfigDivisibilityError
 from jax_rl.train import train
 from jax_rl.types import TrainState
 
@@ -18,7 +19,7 @@ def test_train_raises_when_num_envs_not_divisible_by_device_count(monkeypatch):
     monkeypatch.setattr(train_module.jax, "local_device_count", lambda: 4)
 
     config = PPOConfig(num_envs=6)
-    with pytest.raises(ValueError, match="num_envs must be divisible"):
+    with pytest.raises(ConfigDivisibilityError, match="num_envs must be divisible"):
         train(config)
 
 

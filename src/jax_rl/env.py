@@ -1,10 +1,31 @@
 import jax.numpy as jnp
+from typing import Any, Callable
+
 from gymnax import make as make_gymnax_env
 from stoa import AddRNGKey, AutoResetWrapper, RecordEpisodeMetrics
 from stoa.core_wrappers.episode_metrics import RecordEpisodeMetricsState
 from stoa.core_wrappers.vmap import VmapWrapper
 from stoa.core_wrappers.wrapper import Wrapper
 from stoa.env_adapters.gymnax import GymnaxToStoa
+
+from .exceptions import EnvironmentNotFoundError
+
+
+EnvFactory = Callable[[str, int], tuple[Any, Any]]
+_ENV_REGISTRY: dict[str, EnvFactory] = {}
+
+
+def register_env(prefix: str) -> Callable[[EnvFactory], EnvFactory]:
+    """Register a backend environment factory under a prefix."""
+    normalized = prefix.strip().lower()
+    if not normalized:
+        raise ValueError("Environment prefix cannot be empty.")
+
+    def decorator(factory: EnvFactory) -> EnvFactory:
+        _ENV_REGISTRY[normalized] = factory
+        return factory
+
+    return decorator
 
 
 class BatchedRecordEpisodeMetrics(RecordEpisodeMetrics):
@@ -74,30 +95,50 @@ class RustpoolObsWrapper(Wrapper):
         return state, self._normalize_timestep(timestep)
 
 
-def make_stoa_env(env_name: str, num_envs_per_device: int):
-    if env_name.startswith("rustpool:"):
-        task_id = env_name.split(":", 1)[1]
-        from rustpool.envpool_api.stoa_wrapper import StoaRustpoolWrapper
+@register_env("rustpool")
+def _make_rustpool_env(env_name: str, num_envs_per_device: int):
+    task_id = env_name.split(":", 1)[1]
+    from rustpool.envpool_api.stoa_wrapper import StoaRustpoolWrapper
 
-        env = StoaRustpoolWrapper(task_id=task_id, num_envs_per_device=num_envs_per_device)
-        env = RustpoolObsWrapper(env)
-        env = BatchedRecordEpisodeMetrics(env)
-        return env, None
+    env = StoaRustpoolWrapper(task_id=task_id, num_envs_per_device=num_envs_per_device)
+    env = RustpoolObsWrapper(env)
+    env = BatchedRecordEpisodeMetrics(env)
+    return env, None
 
-    if env_name.startswith("jaxpallet:"):
-        preset = env_name.split(":", 1)[1]
-        from jaxpallet.stoa_adapter import JaxPalletToStoa
 
-        env = JaxPalletToStoa(preset=preset)
-        env = AddRNGKey(env)
-        env = RecordEpisodeMetrics(env)
-        env = AutoResetWrapper(env, next_obs_in_extras=True)
-        env = VmapWrapper(env, num_envs=num_envs_per_device)
-        return env, None
+@register_env("jaxpallet")
+def _make_jaxpallet_env(env_name: str, num_envs_per_device: int):
+    preset = env_name.split(":", 1)[1]
+    from jaxpallet.stoa_adapter import JaxPalletToStoa
 
-    base_env, env_params = make_gymnax_env(env_name)
-    env = GymnaxToStoa(base_env, env_params)
+    env = JaxPalletToStoa(preset=preset)
+    env = AddRNGKey(env)
     env = RecordEpisodeMetrics(env)
     env = AutoResetWrapper(env, next_obs_in_extras=True)
     env = VmapWrapper(env, num_envs=num_envs_per_device)
-    return env, env_params
+    return env, None
+
+
+def make_stoa_env(env_name: str, num_envs_per_device: int):
+    prefix, has_prefix, _ = env_name.partition(":")
+    factory = _ENV_REGISTRY.get(prefix.lower()) if has_prefix else None
+
+    if factory is not None:
+        try:
+            return factory(env_name, num_envs_per_device)
+        except Exception as exc:
+            raise EnvironmentNotFoundError(
+                f"Failed to construct environment '{env_name}' with registered prefix '{prefix}'."
+            ) from exc
+
+    try:
+        base_env, env_params = make_gymnax_env(env_name)
+        env = GymnaxToStoa(base_env, env_params)
+        env = RecordEpisodeMetrics(env)
+        env = AutoResetWrapper(env, next_obs_in_extras=True)
+        env = VmapWrapper(env, num_envs=num_envs_per_device)
+        return env, env_params
+    except Exception as exc:
+        raise EnvironmentNotFoundError(
+            f"Unable to construct environment '{env_name}' from registry or Gymnax fallback."
+        ) from exc

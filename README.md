@@ -8,6 +8,321 @@ JAX implementation of Proximal Policy Optimization (PPO) with `flax.nnx` network
 - Gymnax environments
 - Optax optimizer and gradient clipping
 
+## Architecture
+
+This section describes the current architecture of `jax_rl` end-to-end, with emphasis on the functional PPO training loop, environment routing, model construction, checkpointing, logging, and extension points.
+
+### 1) System Overview
+
+`jax_rl` is a modular PPO implementation that combines:
+
+- Functional state flow (`TrainState`, explicit RNG threading)
+- JAX transforms (`pmap`, `lax.scan`) for batched rollouts/updates
+- `flax.nnx` models split into graph/state for clean serialization
+- Optax actor/critic optimizers with independent schedules
+- Orbax checkpoint management for resumable training
+- Multi-backend environment routing (`rustpool`, `jaxpallet`, Gymnax fallback)
+
+Primary package surface is exported from `src/jax_rl/__init__.py`:
+
+- `PPOConfig`
+- `train`
+- `evaluate`
+- `Checkpointer`
+
+### 2) Architectural Goals
+
+- Preserve deterministic training behavior under fixed seed and config.
+- Keep public APIs stable while allowing internal refactoring.
+- Isolate backend-specific environment setup behind a uniform constructor.
+- Separate acting, learning, evaluation, logging, and persistence concerns.
+- Make failures domain-specific through explicit exceptions.
+
+### 3) Runtime Entry and Bootstrapping
+
+#### CLI
+
+The training entry point is in `src/jax_rl/cli.py`:
+
+1. Parse `--config` path.
+2. Load YAML `training` section into `PPOConfig`.
+3. Execute `train(config)`.
+4. Optionally run post-train `evaluate(...)`.
+
+#### Runtime Defaults
+
+`configure_jax_runtime_defaults` in `src/jax_rl/runtime.py` sets CPU runtime defaults when no explicit JAX platform env vars are present and no NVIDIA device is detected.
+
+### 4) Configuration Model
+
+Configuration is centralized in `src/jax_rl/config.py` via immutable `PPOConfig`.
+
+Notable computed properties:
+
+- `rollout_batch_size = num_envs * num_steps`
+- `num_updates = total_timesteps // rollout_batch_size`
+- `local_device_count = jax.local_device_count()`
+
+Network creation is Hydra-driven through `training.network._target_`, with runtime dimensions injected at construction.
+
+### 5) Core Data Model
+
+Main typed runtime structures are in `src/jax_rl/types.py`:
+
+- `PolicyValueParams(graphdef, state)`
+- `TrainState(params, actor_opt_state, critic_opt_state)`
+- `RunnerState(train_state, env_state, obs, key)`
+- `RolloutBatch` and `FlattenBatch`
+- `LogEvent` event categories for telemetry
+
+These types define the canonical payloads exchanged between rollout, update, checkpoint, and evaluation subsystems.
+
+### 6) Module Responsibilities
+
+#### Environment Construction
+
+`src/jax_rl/env.py`
+
+- Provides environment wrappers and normalization adapters.
+- Exposes `make_stoa_env(env_name: str, num_envs_per_device: int)`.
+- Routes backend creation through a prefix registry.
+
+#### Networks and Distributions
+
+`src/jax_rl/networks.py`
+
+- Observation flattening and action-mask handling.
+- Policy/value model definitions (MLP and binpack transformer variants).
+- Hydra target resolution via `init_policy_value_params(...)`.
+- Distribution abstraction and forward apply function.
+
+#### Rollout Collection
+
+`src/jax_rl/rollout.py`
+
+- Uses `lax.scan` to collect trajectories.
+- Computes done/truncated flags and bootstrap values.
+- Returns structured rollout batch + auxiliary episode info.
+
+#### PPO Update Step
+
+`src/jax_rl/update.py`
+
+- Computes GAE/returns.
+- Flattens dataset and shuffles minibatches.
+- Runs epoch/minibatch update loops with gradient computation.
+- Splits/merges actor and critic updates from module-prefixed gradients.
+
+#### Losses and Advantages
+
+- PPO objective in `src/jax_rl/losses.py`
+- GAE in `src/jax_rl/advantages.py`
+
+#### Training Orchestration
+
+`src/jax_rl/train.py`
+
+- Performs configuration validation and setup.
+- Creates env, model, optimizer, logger, and checkpointer.
+- Runs rollout/update loop with periodic eval/checkpointing.
+
+#### Evaluation
+
+`src/jax_rl/eval.py`
+
+- Creates single-env evaluation environment.
+- Runs deterministic policy mode action selection.
+- Aggregates episode return statistics.
+
+#### Checkpointing
+
+`src/jax_rl/checkpoint.py`
+
+- Encapsulates Orbax manager/checkpointer.
+- Saves and restores `train_state` + RNG key + metadata.
+- Supports explicit path restore and manager-based restore.
+
+#### Logging
+
+`src/jax_rl/logging.py`
+
+- Console and TensorBoard sinks behind `jaxRL_Logger`.
+- Metric flattening/stat summarization for arrays.
+- Event-prefixed metric materialization.
+
+#### Export
+
+`src/jax_rl/export.py`
+
+- ONNX export through `jax2onnx` using merged graph/state forward wrapper.
+
+### 7) Environment Routing Architecture
+
+`env_name` follows a prefix pattern:
+
+- `rustpool:<task>`
+- `jaxpallet:<preset>`
+- no prefix (or unmatched prefix) -> Gymnax fallback attempt
+
+Registry components in `src/jax_rl/env.py`:
+
+- `EnvFactory = Callable[[str, int], tuple[Any, Any]]`
+- `_ENV_REGISTRY: dict[str, EnvFactory]`
+- `@register_env(prefix)` decorator
+
+Built-in registrations:
+
+- `_make_rustpool_env` via `@register_env("rustpool")`
+- `_make_jaxpallet_env` via `@register_env("jaxpallet")`
+
+Failure mode:
+
+- If no registered prefix handles `env_name` and Gymnax fallback fails, `EnvironmentNotFoundError` is raised.
+
+#### Adding a New Backend
+
+1. Implement a factory function with signature `(env_name: str, num_envs_per_device: int) -> tuple[env, env_params]`.
+2. Register it with `@register_env("mybackend")`.
+3. Keep all backend-specific imports inside the factory for optional dependency isolation.
+4. Return environment objects matching the training loop expectations.
+
+### 8) Exception Taxonomy
+
+Domain exceptions are defined in `src/jax_rl/exceptions.py`:
+
+- `JaxRLError(Exception)`
+- `ConfigDivisibilityError(JaxRLError, ValueError)`
+- `NetworkTargetResolutionError(JaxRLError, ValueError)`
+- `EnvironmentNotFoundError(JaxRLError, ValueError)`
+- `CheckpointRestoreError(JaxRLError, FileNotFoundError)`
+
+Usage guidelines:
+
+- Raise `ConfigDivisibilityError` only for device/batch divisibility checks.
+- Raise `NetworkTargetResolutionError` for Hydra target resolution/instantiation failures.
+- Raise `EnvironmentNotFoundError` for unresolved env creation paths.
+- Raise `CheckpointRestoreError` for restore path/payload validation failures.
+
+### 9) Checkpoint Restore Architecture
+
+`Checkpointer.restore(...)` keeps its public signature and delegates internally:
+
+- `_restore_from_explicit_path(target, timestep, template_items)`
+- `_restore_from_manager(timestep, template_items)`
+
+Both return a normalized internal payload consumed by `restore` to emit the stable response contract:
+
+- `step: int`
+- `train_state: TrainState`
+- `key: Array`
+- `metadata: dict`
+
+Validation/coercion helpers:
+
+- `_coerce_train_state(...)`
+- `_validate_train_state(...)`
+
+### 10) Training Loop Data Flow
+
+High-level flow in `src/jax_rl/train.py`:
+
+1. Validate rollout/minibatch/device divisibility.
+2. Build env via `make_stoa_env`.
+3. Infer observation/action dimensions.
+4. Initialize model params + optimizers.
+5. Optionally restore from checkpoint.
+6. Replicate train state across local devices.
+7. `pmap` init runner state.
+8. For each update:
+  - `pmap` rollout step (`collect_rollout`)
+  - `pmap` PPO update (`ppo_update`)
+  - optional eval
+  - structured logging
+  - periodic checkpoint save
+9. Return final run summary and model params.
+
+### 11) Numerical and Shape Contracts
+
+#### Observation Flattening
+
+`flatten_observation_features(...)` in `src/jax_rl/networks.py`:
+
+- Accepts array or mapping of arrays.
+- Excludes `action_mask` from concatenated feature vector.
+- Returns `(features, action_mask | None)`.
+
+#### Binpack Logits
+
+`_flatten_binpack_logits(...)` in `src/jax_rl/networks.py`:
+
+- Transforms score tensor from `[B, E, I]` to flattened logits `[B, I * E * R]` where `R` is inferred from action mask dimensionality.
+
+#### PPO Objective
+
+`ppo_loss(...)` in `src/jax_rl/losses.py`:
+
+- Clipped policy ratio objective.
+- Clipped value target objective.
+- Entropy regularization.
+- NaN/Inf guard on reported metrics.
+
+#### GAE
+
+`compute_gae(...)` in `src/jax_rl/advantages.py`:
+
+- Supports truncated-episode handling and optional bootstrap values.
+- Uses reverse scan recursion for efficient batched advantage computation.
+
+### 12) Logging and Observability
+
+`jaxRL_Logger` in `src/jax_rl/logging.py`:
+
+- Console sink always active by default.
+- TensorBoard sink enabled when configured.
+- Array metrics are summarized into scalar stats for non-console sinks.
+- Sink failures are non-fatal and warned once.
+
+### 13) Public API Stability Contract
+
+The following signatures are stable and should not be changed without versioned migration:
+
+- `make_stoa_env(env_name: str, num_envs_per_device: int)`
+- `Checkpointer.restore(...)`
+- `train(config: PPOConfig)`
+- `ppo_loss(...)`
+
+Internal refactors should preserve:
+
+- Returned object structure and key names.
+- Existing CLI behavior.
+- Training loop semantics under equivalent config/seed.
+
+### 14) Testing Strategy and Coverage
+
+Architecture-level checks are covered by tests in `tests`:
+
+- Environment registry and fallback errors in `tests/test_env_registry.py`
+- Divisibility exception behavior in `tests/test_scaling.py`
+- Network target resolution errors in `tests/test_networks.py`
+- Checkpoint roundtrip and restore failure behavior in `tests/test_checkpoint_eval.py`
+- Integration pipeline behavior in `tests/test_integration.py`
+
+Recommended verification commands:
+
+- `uv run pytest tests/test_env_registry.py -q`
+- `uv run pytest tests/test_scaling.py tests/test_networks.py tests/test_checkpoint_eval.py -q`
+- `uv run pytest -q`
+
+### 15) Extension Checklist
+
+When adding a new module or backend:
+
+1. Keep domain errors explicit and use `exceptions.py` taxonomy.
+2. Keep optional backend imports local to backend builders.
+3. Preserve existing public signatures and payload shapes.
+4. Add targeted tests first, then run full regression suite.
+5. Update architecture documentation in this README in the same change.
+
 ## Install
 
 ```bash

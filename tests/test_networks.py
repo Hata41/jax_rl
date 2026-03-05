@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import pytest
 from flax import nnx
 
+from jax_rl.exceptions import NetworkTargetResolutionError
 from jax_rl.networks import (
     BinPackPolicyValueModel,
     TransformerBlock,
@@ -247,7 +248,7 @@ def test_network_parameter_injection_hidden_dim_reaches_constructor():
 
 
 def test_missing_network_target_raises_value_error():
-    with pytest.raises(ValueError, match="_target_"):
+    with pytest.raises(NetworkTargetResolutionError, match="_target_"):
         init_policy_value_params(
             jax.random.PRNGKey(101),
             network_config={"hidden_sizes": [16, 16]},

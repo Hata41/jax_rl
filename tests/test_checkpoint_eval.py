@@ -2,9 +2,11 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import pytest
 
 from jax_rl.checkpoint import Checkpointer
 from jax_rl.config import PPOConfig
+from jax_rl.exceptions import CheckpointRestoreError
 from jax_rl.eval import evaluate
 from jax_rl.networks import init_policy_value_params
 from jax_rl.types import TrainState
@@ -103,3 +105,11 @@ def test_evaluate_returns_expected_keys():
     for key in ["return_mean", "return_std", "return_min", "return_max", "episodes"]:
         assert key in metrics
     assert metrics["episodes"] == 2
+
+
+def test_restore_nonexistent_explicit_path_raises_checkpoint_restore_error(tmp_path: Path):
+    checkpointer = Checkpointer(checkpoint_dir=str(tmp_path / "manager"))
+    missing_dir = tmp_path / "does-not-exist"
+
+    with pytest.raises(CheckpointRestoreError, match="does not exist"):
+        checkpointer.restore(checkpoint_path=str(missing_dir))
