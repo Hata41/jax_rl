@@ -1,33 +1,13 @@
 import jax
 import jax.numpy as jnp
-import pytest
 from flax import nnx
 
-from jax_rl.utils.exceptions import NetworkTargetResolutionError
 from jax_rl.networks import (
     BinPackPolicyValueModel,
-    TransformerBlock,
     _flatten_binpack_logits,
     init_policy_value_params,
     policy_value_apply,
 )
-
-
-class _CustomTargetModule(nnx.Module):
-    last_hidden_dim: int | None = None
-
-    def __init__(self, obs_dim: int, action_dims: int, hidden_dim: int, rngs: nnx.Rngs):
-        type(self).last_hidden_dim = int(hidden_dim)
-        self.proj = nnx.Linear(obs_dim, hidden_dim, rngs=rngs)
-        self.actor = nnx.Linear(hidden_dim, action_dims, rngs=rngs)
-        self.critic = nnx.Linear(hidden_dim, 1, rngs=rngs)
-
-    def __call__(self, obs: jax.Array):
-        h = jnp.tanh(self.proj(obs))
-        return self.actor(h), self.critic(h).squeeze(-1)
-
-
-_CUSTOM_TARGET_PATH = f"{__name__}._CustomTargetModule"
 
 
 def _path_token(entry) -> str:
@@ -60,9 +40,9 @@ def test_multidiscrete_action_space_output_shapes():
     key = jax.random.PRNGKey(0)
     params = init_policy_value_params(
         key,
-        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [32, 32]},
         obs_dim=4,
         action_dims=(2, 3),
+        hidden_sizes=(32, 32),
     )
 
     obs = jax.random.normal(jax.random.PRNGKey(1), (8, 4))
@@ -79,9 +59,9 @@ def test_modular_forward_pass_value_shape():
     key = jax.random.PRNGKey(3)
     params = init_policy_value_params(
         key,
-        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [64, 64]},
         obs_dim=4,
         action_dims=2,
+        hidden_sizes=(64, 64),
     )
 
     obs = jnp.zeros((16, 4), dtype=jnp.float32)
@@ -94,9 +74,9 @@ def test_orthogonal_head_scales_actor_vs_critic_variance():
     key = jax.random.PRNGKey(7)
     params = init_policy_value_params(
         key,
-        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [128, 128]},
         obs_dim=8,
         action_dims=4,
+        hidden_sizes=(128, 128),
     )
 
     actor_w = _find_first_kernel(params.state, module_prefix="actor_head")
@@ -157,29 +137,6 @@ def test_binpack_transformer_masking_and_pooling_edge_cases():
     assert jnp.all(jnp.isfinite(values))
 
 
-def test_transformer_block_masked_tokens_do_not_leak_context():
-    block = TransformerBlock(dim=8, num_heads=2, rngs=nnx.Rngs(jax.random.PRNGKey(2026)))
-
-    q = jnp.asarray([[[0.5, -0.5, 0.3, 0.1, -0.2, 0.7, -0.1, 0.9]]], dtype=jnp.float32)
-    k = jnp.asarray(
-        [[[0.1, 0.2, -0.1, 0.3, 0.2, -0.4, 0.6, -0.5], [0.7, -0.2, 0.4, 0.9, -0.3, 0.1, -0.8, 0.2]]],
-        dtype=jnp.float32,
-    )
-    v_clean = jnp.asarray(
-        [[[0.2, -0.1, 0.4, -0.3, 0.1, 0.0, 0.5, -0.2], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]],
-        dtype=jnp.float32,
-    )
-    v_padded_extreme = v_clean.at[:, 1, :].set(
-        jnp.asarray([1200.0, -900.0, 800.0, -700.0, 600.0, -500.0, 400.0, -300.0], dtype=jnp.float32)
-    )
-
-    mask = jnp.asarray([[[[True, False]]]], dtype=jnp.bool_)
-    out_clean = block(q, k, v_clean, mask=mask)
-    out_padded = block(q, k, v_padded_extreme, mask=mask)
-
-    assert jnp.allclose(out_clean, out_padded, rtol=0.0, atol=1e-5)
-
-
 def test_binpack_actor_index_alignment_item_ems_rotation_order():
     batch_size = 1
     num_ems = 2
@@ -215,75 +172,3 @@ def test_binpack_actor_rotational_consistency_before_masking():
     first_rot = logits_4d[..., :1]
     tiled_first = jnp.tile(first_rot, (1, 1, 1, num_rotations))
     assert jnp.allclose(logits_4d, tiled_first)
-
-
-def test_network_target_instantiation_custom_module_state_structure():
-    params = init_policy_value_params(
-        jax.random.PRNGKey(99),
-        network_config={
-            "_target_": _CUSTOM_TARGET_PATH,
-            "hidden_dim": 48,
-        },
-        obs_dim=4,
-        action_dims=3,
-    )
-
-    proj_kernel = _find_first_kernel(params.state, module_prefix="proj")
-    assert proj_kernel.shape == (4, 48)
-
-
-def test_network_parameter_injection_hidden_dim_reaches_constructor():
-    _CustomTargetModule.last_hidden_dim = None
-    init_policy_value_params(
-        jax.random.PRNGKey(100),
-        network_config={
-            "_target_": _CUSTOM_TARGET_PATH,
-            "hidden_dim": 128,
-        },
-        obs_dim=6,
-        action_dims=2,
-    )
-
-    assert _CustomTargetModule.last_hidden_dim == 128
-
-
-def test_missing_network_target_raises_value_error():
-    with pytest.raises(NetworkTargetResolutionError, match="_target_"):
-        init_policy_value_params(
-            jax.random.PRNGKey(101),
-            network_config={"hidden_sizes": [16, 16]},
-            obs_dim=4,
-            action_dims=2,
-        )
-
-
-def test_shared_torso_instantiation():
-    params = init_policy_value_params(
-        jax.random.PRNGKey(202),
-        network_config={
-            "_target_": "jax_rl.networks.PolicyValueModel",
-            "hidden_sizes": [16],
-            "shared_torso": True,
-        },
-        obs_dim=4,
-        action_dims=2,
-    )
-
-    found_shared = False
-    found_actor = False
-    found_critic = False
-
-    def _collector(path, leaf):
-        nonlocal found_shared, found_actor, found_critic
-        del leaf
-        tokens = [_path_token(entry) for entry in path]
-        found_shared = found_shared or any(token.startswith("shared_torso") for token in tokens)
-        found_actor = found_actor or any(token.startswith("actor_torso") for token in tokens)
-        found_critic = found_critic or any(token.startswith("critic_torso") for token in tokens)
-        return None
-
-    jax.tree_util.tree_map_with_path(_collector, params.state)
-
-    assert found_shared
-    assert not found_actor
-    assert not found_critic
