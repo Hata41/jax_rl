@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
@@ -11,7 +13,10 @@ from .systems.ppo.anakin.system import train
 
 register_configs()
 
-@hydra.main(version_base=None, config_path="../../config", config_name="train")
+_CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "config")
+
+
+@hydra.main(version_base=None, config_path=_CONFIG_DIR, config_name="train")
 def main(cfg: DictConfig) -> None:
     typed = OmegaConf.to_object(cfg)
 

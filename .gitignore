@@ -36,6 +36,11 @@ runs_tb/
 tensorboard/
 uv.lock
 
+# --- Hydra outputs ---
+outputs/
+multirun/
+.hydra/
+
 # --- IDE / editor ---
 .vscode/
 .idea/

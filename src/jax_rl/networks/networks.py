@@ -458,8 +458,18 @@ def init_policy_value_params(
         if value is not None
         and (accepts_kwargs or name in constructor_sig.parameters)
     }
+    filtered_network_config = {
+        key: value
+        for key, value in network_config.items()
+        if key != "_delete_"
+        and (key.startswith("_") or accepts_kwargs or key in constructor_sig.parameters)
+    }
     try:
-        model_factory = hydra.utils.instantiate(network_config, _partial_=True, _convert_="all")
+        model_factory = hydra.utils.instantiate(
+            filtered_network_config,
+            _partial_=True,
+            _convert_="all",
+        )
     except Exception as exc:
         raise NetworkTargetResolutionError(
             "Failed to instantiate network from config. "

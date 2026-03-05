@@ -2,15 +2,11 @@ defaults:
   - base_config
   - _self_
 
-# Environment routing:
-# - rustpool: rustpool:<task_id>        (example: rustpool:BinPack-v0)
-# - jaxpallet: jaxpallet:<preset>       (example: jaxpallet:PMC-PLD)
-# - gymnax fallback: plain env id       (example: CartPole-v1)
 env_name: rustpool:BinPack-v0
 seed: 0
-total_timesteps: 2048
+total_timesteps: 2048000
 
-num_envs: 8
+num_envs: 64
 num_steps: 32
 
 actor_lr: 0.0003
@@ -29,8 +25,8 @@ max_grad_norm: 0.5
 network:
   _delete_: true
   _target_: jax_rl.networks.BinPackPolicyValueModel
-  hidden_dim: 32
-  num_heads: 2
+  hidden_dim: 16
+  num_heads: 1
   num_layers: 1
 
 log_every: 1
@@ -42,12 +38,12 @@ keep_period: null
 resume_from: null
 
 tensorboard_logdir: runs_tb
-tensorboard_run_name: minimal
+tensorboard_run_name: rustpool_binpack
 
 evaluations:
   default_eval:
     env_name: rustpool:BinPack-v0
     eval_every: 1
-    num_episodes: 16
+    num_episodes: 160
     max_steps_per_episode: 30
     greedy: true
