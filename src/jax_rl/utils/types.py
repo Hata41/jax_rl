@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, NamedTuple
 
@@ -63,3 +64,16 @@ class RunnerState(NamedTuple):
     env_state: Any
     obs: Array
     key: Array
+
+
+@dataclass
+class SystemComponents:
+    runner_state: RunnerState
+    env: Any
+    env_params: Any
+    actor_optimizer: Any
+    critic_optimizer: Any
+    checkpointer: Any
+    start_update: int
+    num_devices: int
+    num_envs_per_device: int

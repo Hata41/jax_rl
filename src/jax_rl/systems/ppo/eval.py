@@ -1,9 +1,13 @@
+import time
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 
 from ...envs.env import make_stoa_env
 from ...networks import policy_value_apply
 from ...utils.exceptions import ConfigDivisibilityError
+from ...utils.runtime import PhaseTimer
 from ...utils.types import PolicyValueParams
 
 
@@ -33,6 +37,10 @@ def _is_replicated_state(state, num_devices: int) -> bool:
         hasattr(leaf, "shape") and len(leaf.shape) > 0 and int(leaf.shape[0]) == int(num_devices)
         for leaf in leaves
     )
+
+
+def _prefixed_metrics(prefix: str, metrics: dict[str, float]) -> dict[str, float]:
+    return {f"{prefix}/{key}": value for key, value in metrics.items()}
 
 
 class Evaluator:
@@ -146,6 +154,67 @@ class Evaluator:
         self._closed = True
         if self.env is not None and hasattr(self.env, "close"):
             self.env.close()
+
+
+class EvaluationManager:
+    def __init__(
+        self,
+        evaluations: dict[str, dict[str, Any]] | None,
+        default_env_name: str,
+        evaluator_cls=Evaluator,
+        now_fn=None,
+    ):
+        self._evaluators: dict[str, Evaluator] = {}
+        self._eval_every_by_name: dict[str, int] = {}
+        self._evaluator_cls = evaluator_cls
+        self._now = now_fn or time.time
+
+        for eval_name, eval_cfg in (evaluations or {}).items():
+            cfg = dict(eval_cfg)
+            num_episodes = int(cfg.get("num_episodes", 10))
+            if num_episodes <= 0:
+                continue
+            self._evaluators[eval_name] = self._evaluator_cls(
+                env_name=str(cfg.get("env_name", default_env_name)),
+                num_episodes=num_episodes,
+                max_steps_per_episode=int(cfg.get("max_steps_per_episode", 1_000)),
+                greedy=bool(cfg.get("greedy", True)),
+            )
+            self._eval_every_by_name[eval_name] = int(cfg.get("eval_every", 10))
+
+    def run_if_needed(
+        self,
+        update_idx: int,
+        params,
+        seed: int,
+    ) -> dict[str, float]:
+        eval_metrics: dict[str, float] = {}
+
+        for eval_name, evaluator in self._evaluators.items():
+            eval_every = self._eval_every_by_name.get(eval_name, 10)
+            if eval_every <= 0 or update_idx % eval_every != 0:
+                continue
+
+            timer = PhaseTimer(now_fn=self._now)
+            phase_name = f"eval:{eval_name}"
+            with timer.phase(phase_name):
+                eval_results = evaluator.run(
+                    replicated_params=params,
+                    seed=int(seed),
+                )
+
+            prefixed = _prefixed_metrics(eval_name, dict(eval_results))
+            prefixed[f"{eval_name}/steps_per_second"] = timer.steps_per_second(
+                phase_name,
+                float(eval_results.get("steps", 0)),
+            )
+            eval_metrics.update(prefixed)
+
+        return eval_metrics
+
+    def close(self) -> None:
+        for evaluator in self._evaluators.values():
+            evaluator.close()
 
 
 def evaluate(

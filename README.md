@@ -130,15 +130,17 @@ These types define the canonical payloads exchanged between rollout, update, che
 
 `src/jax_rl/systems/ppo/anakin/system.py`
 
-- Performs configuration validation and setup.
-- Creates env, model, optimizer, logger, and checkpointer.
-- Runs rollout/update loop with periodic eval/checkpointing.
+- Coordinates rollout/update/eval/log/checkpoint at a high level.
+- Delegates system construction to `src/jax_rl/systems/ppo/anakin/factory.py`.
+- Uses `PhaseTimer` (`src/jax_rl/utils/runtime.py`) and logging helpers (`src/jax_rl/utils/logging.py`).
+- Full step-by-step training walkthrough: `src/jax_rl/systems/ppo/anakin/README.md`.
 
 #### Evaluation
 
 `src/jax_rl/systems/ppo/eval.py`
 
 - Provides a stateful `Evaluator` class that instantiates the evaluation environment once and reuses a compiled `pmap` graph across evaluation calls.
+- Provides `EvaluationManager` for in-loop multi-evaluation scheduling and prefixed metric aggregation.
 - Runs reset and step inside `pmap(axis_name="device")` to support both pure-JAX backends and `rustpool`'s device-indexed callback routing.
 - Executes episode rollout with `jax.lax.scan` and an active-mask to avoid reward inflation after terminal steps under auto-reset wrappers.
 - Exposes `run(replicated_params, seed)` for fast in-loop evaluation and `close()` for explicit native resource/thread cleanup.
@@ -237,20 +239,15 @@ Validation/coercion helpers:
 
 High-level flow in `src/jax_rl/systems/ppo/anakin/system.py`:
 
-1. Validate rollout/minibatch/device divisibility.
-2. Build env via `make_stoa_env`.
-3. Infer observation/action dimensions.
-4. Initialize model params + optimizers.
-5. Optionally restore from checkpoint.
-6. Replicate train state across local devices.
-7. `pmap` init runner state.
-8. For each update:
+1. Build initialized system components via `build_system(...)` in `src/jax_rl/systems/ppo/anakin/factory.py` (validation, env/model/optimizer/checkpoint setup, state replication, pmapped runner init).
+2. Build pmapped PPO step functions.
+3. For each update:
   - `pmap` rollout step (`collect_rollout`)
   - `pmap` PPO update (`ppo_update`)
-  - optional multi-profile eval dispatch from `config.evaluations`
+  - optional multi-profile eval dispatch through `EvaluationManager` in `src/jax_rl/systems/ppo/eval.py`
   - structured logging
   - periodic checkpoint save
-9. Return final run summary and model params.
+4. Return final run summary and model params.
 
 ### 11) Numerical and Shape Contracts
 

@@ -92,6 +92,21 @@ def _format_console_value(value: float) -> str:
     return f"{value:.6g}"
 
 
+def extract_learning_rate(actor_opt_state) -> float:
+    stack = [actor_opt_state]
+    while stack:
+        current = stack.pop()
+        if hasattr(current, "hyperparams"):
+            hyperparams = getattr(current, "hyperparams")
+            if isinstance(hyperparams, dict) and "learning_rate" in hyperparams:
+                return float(np.asarray(hyperparams["learning_rate"]))
+        if isinstance(current, dict):
+            stack.extend(current.values())
+        elif isinstance(current, (tuple, list)):
+            stack.extend(current)
+    return float("nan")
+
+
 def extract_completed_episode_metrics(rollout_infos: Mapping[str, Any]) -> dict[str, dict[str, float]]:
     returns = np.asarray(
         rollout_infos.get("returned_episode_returns", rollout_infos.get("episode_return")),

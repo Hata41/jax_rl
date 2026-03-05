@@ -1,5 +1,6 @@
 from jax_rl.configs.config import PPOConfig
 from jax_rl.envs.env import make_stoa_env
+from jax_rl.systems.ppo.anakin.factory import build_system
 from jax_rl.systems.ppo.anakin.steps import make_ppo_steps
 from jax_rl.systems.ppo.update import make_actor_optimizer, make_critic_optimizer
 
@@ -22,3 +23,7 @@ def test_make_ppo_steps_returns_pmap_functions():
     assert callable(pmap_update)
     assert hasattr(pmap_rollout, "lower")
     assert hasattr(pmap_update, "lower")
+
+
+def test_build_system_is_exposed_from_factory_module():
+    assert callable(build_system)
