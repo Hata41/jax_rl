@@ -154,8 +154,61 @@ def _make_rlpallet_env(env_name: str, num_envs_per_device: int, env_kwargs: dict
             self._state_ids_struct = jax.ShapeDtypeStruct(
                 (self.num_envs_per_device,), jnp.int32
             )
+            self._structs_initialized = False
 
+        def _ensure_structs_initialized(self) -> None:
+            if self._structs_initialized:
+                return
             self._build_structs_from_probe()
+            self._structs_initialized = True
+
+        def _build_structs_from_probe(self) -> None:
+            pool = self.sharded_pools[0]
+            pool.async_reset(None)
+            obs_reset, reward_reset, _done_reset, info_reset = pool.recv()
+
+            env_ids = np.asarray(
+                info_reset.get(
+                    "env_id", np.arange(self.num_envs_per_device, dtype=np.int32)
+                ),
+                dtype=np.int32,
+            )
+            self._env_ids_by_device[0] = env_ids
+
+            probe_info = dict(info_reset)
+            if "state_id" not in probe_info:
+                probe_info["state_id"] = np.zeros(
+                    self.num_envs_per_device, dtype=np.int32
+                )
+
+            obs_probe = self._normalize_tree(obs_reset)
+            reward_probe = np.asarray(reward_reset, dtype=np.float32)
+            if reward_probe.shape != (self.num_envs_per_device,):
+                reward_probe = np.zeros((self.num_envs_per_device,), dtype=np.float32)
+
+            self.ts_struct = self._to_timestep_struct(obs_probe, reward_probe, probe_info)
+            self._obs_spec = self.sharded_pools[0].observation_spec()
+            self._action_spec = self.sharded_pools[0].action_spec()
+
+        def reset(self, rng_key, env_params=None):
+            self._ensure_structs_initialized()
+            return super().reset(rng_key, env_params)
+
+        def observation_space(self, env_params=None):
+            self._ensure_structs_initialized()
+            return super().observation_space(env_params)
+
+        def action_space(self, env_params=None):
+            self._ensure_structs_initialized()
+            return super().action_space(env_params)
+
+        def step(self, state, action, env_params=None):
+            self._ensure_structs_initialized()
+            return super().step(state, action, env_params)
+
+        def simulate_batch(self, state, state_ids, actions):
+            self._ensure_structs_initialized()
+            return super().simulate_batch(state, state_ids, actions)
 
     env = StoaRlpalletWrapper(
         task_id=task_id,

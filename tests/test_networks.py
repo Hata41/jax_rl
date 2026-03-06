@@ -292,6 +292,53 @@ def test_modular_model_forward_pass():
     assert values.shape == (2,)
 
 
+def test_modular_model_all_invalid_action_mask_falls_back_to_safe_logits():
+    class DummyInputAdapter(nnx.Module):
+        def __call__(self, obs: dict):
+            return (
+                jnp.asarray(obs["ems_embeddings"], dtype=jnp.float32),
+                jnp.asarray(obs["item_embeddings"], dtype=jnp.float32),
+                jnp.asarray(obs["ems_mask"], dtype=jnp.bool_),
+                jnp.asarray(obs["item_mask"], dtype=jnp.bool_),
+            )
+
+    class DummyTorso(nnx.Module):
+        def __call__(self, ems_embeddings, item_embeddings, ems_mask, item_mask):
+            del ems_mask, item_mask
+            return ems_embeddings, item_embeddings
+
+    class DummyActorHead(nnx.Module):
+        def __call__(self, ems_embeddings, item_embeddings, action_mask):
+            del ems_embeddings, item_embeddings
+            base = jnp.arange(action_mask.shape[-1], dtype=jnp.float32)
+            return jnp.broadcast_to(base[None, :], action_mask.shape)
+
+    class DummyCriticHead(nnx.Module):
+        def __call__(self, ems_embeddings, item_embeddings, ems_mask, item_mask):
+            del item_embeddings, ems_mask, item_mask
+            return jnp.zeros((ems_embeddings.shape[0],), dtype=jnp.float32)
+
+    model = ModularPolicyValueModel(
+        input_adapter=DummyInputAdapter(),
+        shared_torso=DummyTorso(),
+        actor_head=DummyActorHead(),
+        critic_head=DummyCriticHead(),
+    )
+
+    obs = {
+        "ems_embeddings": jnp.ones((2, 3, 8), dtype=jnp.float32),
+        "item_embeddings": jnp.ones((2, 4, 8), dtype=jnp.float32),
+        "ems_mask": jnp.ones((2, 3), dtype=jnp.bool_),
+        "item_mask": jnp.ones((2, 4), dtype=jnp.bool_),
+        "action_mask": jnp.zeros((2, 12), dtype=jnp.bool_),
+    }
+    logits, values = model(obs)
+
+    assert values.shape == (2,)
+    assert jnp.all(jnp.isfinite(logits))
+    assert jnp.any(logits != jnp.asarray(-1e9, dtype=logits.dtype))
+
+
 def test_binpack_transformer_forward_shapes():
     model = BinPackPolicyValueModel(
         hidden_dim=32,

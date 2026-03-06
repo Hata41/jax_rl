@@ -166,6 +166,7 @@ class EvaluationManager:
         now_fn=None,
     ):
         self._evaluators: dict[str, Evaluator] = {}
+        self._evaluator_specs: dict[str, dict[str, Any]] = {}
         self._eval_every_by_name: dict[str, int] = {}
         self._evaluator_cls = evaluator_cls
         self._now = now_fn or time.time
@@ -175,14 +176,33 @@ class EvaluationManager:
             num_episodes = int(cfg.get("num_episodes", 10))
             if num_episodes <= 0:
                 continue
-            self._evaluators[eval_name] = self._evaluator_cls(
-                env_name=str(cfg.get("env_name", default_env_name)),
-                num_episodes=num_episodes,
-                max_steps_per_episode=int(cfg.get("max_steps_per_episode", 1_000)),
-                greedy=bool(cfg.get("greedy", True)),
-                env_kwargs=dict(cfg.get("env_kwargs", default_env_kwargs or {})),
-            )
+            self._evaluator_specs[eval_name] = {
+                "env_name": str(cfg.get("env_name", default_env_name)),
+                "num_episodes": num_episodes,
+                "max_steps_per_episode": int(cfg.get("max_steps_per_episode", 1_000)),
+                "greedy": bool(cfg.get("greedy", True)),
+                "env_kwargs": dict(cfg.get("env_kwargs", default_env_kwargs or {})),
+            }
             self._eval_every_by_name[eval_name] = int(cfg.get("eval_every", 10))
+
+    def _get_or_create_evaluator(self, eval_name: str) -> Evaluator | None:
+        existing = self._evaluators.get(eval_name)
+        if existing is not None:
+            return existing
+
+        spec = self._evaluator_specs.get(eval_name)
+        if spec is None:
+            return None
+
+        evaluator = self._evaluator_cls(
+            env_name=spec["env_name"],
+            num_episodes=spec["num_episodes"],
+            max_steps_per_episode=spec["max_steps_per_episode"],
+            greedy=spec["greedy"],
+            env_kwargs=spec["env_kwargs"],
+        )
+        self._evaluators[eval_name] = evaluator
+        return evaluator
 
     def run_if_needed(
         self,
@@ -192,9 +212,12 @@ class EvaluationManager:
     ) -> dict[str, float]:
         eval_metrics: dict[str, float] = {}
 
-        for eval_name, evaluator in self._evaluators.items():
+        for eval_name in self._evaluator_specs:
             eval_every = self._eval_every_by_name.get(eval_name, 10)
             if eval_every <= 0 or update_idx % eval_every != 0:
+                continue
+            evaluator = self._get_or_create_evaluator(eval_name)
+            if evaluator is None:
                 continue
 
             timer = PhaseTimer(now_fn=self._now)

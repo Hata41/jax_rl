@@ -509,6 +509,9 @@ class ModularPolicyValueModel(nnx.Module):
 
         action_mask = jnp.asarray(obs["action_mask"], dtype=jnp.bool_)
         logits = self.actor_head(ems_embeddings, item_embeddings, action_mask)
+        has_any_valid = jnp.any(action_mask, axis=-1, keepdims=True)
+        safe_mask = jnp.where(has_any_valid, action_mask, jnp.ones_like(action_mask, dtype=jnp.bool_))
+        logits = jnp.where(safe_mask, logits, jnp.asarray(-1e9, dtype=logits.dtype))
         values = self.critic_head(ems_embeddings, item_embeddings, ems_mask, item_mask)
         return logits, values
 
@@ -551,6 +554,9 @@ class BinPackPolicyValueModel(nnx.Module):
 
         action_mask = jnp.asarray(obs["action_mask"], dtype=jnp.bool_)
         logits = self.actor_head(ems_embeddings, item_embeddings, action_mask)
+        has_any_valid = jnp.any(action_mask, axis=-1, keepdims=True)
+        safe_mask = jnp.where(has_any_valid, action_mask, jnp.ones_like(action_mask, dtype=jnp.bool_))
+        logits = jnp.where(safe_mask, logits, jnp.asarray(-1e9, dtype=logits.dtype))
         values = self.critic_head(ems_embeddings, item_embeddings, ems_mask, item_mask)
         return logits, values
 
