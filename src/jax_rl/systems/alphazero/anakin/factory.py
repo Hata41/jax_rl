@@ -13,7 +13,7 @@ from ....configs.config import ExperimentConfig
 from ....envs.env import make_stoa_env
 from ....networks import init_policy_value_params
 from ....systems.ppo.update import make_actor_optimizer, make_critic_optimizer
-from ....utils.checkpoint import Checkpointer
+from ....utils.checkpoint import Checkpointer, resolve_resume_from
 from ....utils.exceptions import ConfigDivisibilityError, SearchTreeCapacityError
 from ....utils.jax_utils import normalize_restored_train_state_and_key, replicate_tree
 from ....utils.shapes import space_feature_dim, space_flat_dim
@@ -134,16 +134,22 @@ def build_system(config: ExperimentConfig, runner_state_cls: type):
     )
 
     checkpointer = Checkpointer(
-        checkpoint_dir=config.checkpointing.checkpoint_dir,
-        max_to_keep=config.checkpointing.max_to_keep,
-        keep_period=config.checkpointing.keep_period,
-        save_interval_steps=config.checkpointing.save_interval_steps,
+        checkpoint_dir=config.io.checkpoint.checkpoint_dir,
+        max_to_keep=config.io.checkpoint.max_to_keep,
+        keep_period=config.io.checkpoint.keep_period,
+        save_interval_steps=config.io.checkpoint.save_interval_steps,
         metadata={"config": asdict(config)},
     )
 
-    if config.checkpointing.resume_from:
+    if config.io.checkpoint.resume_from:
+        resume_path = resolve_resume_from(
+            checkpoint_dir=config.io.checkpoint.checkpoint_dir,
+            env_name=config.env.env_name,
+            resume_from=config.io.checkpoint.resume_from,
+            source_algo="alphazero",
+        )
         payload = checkpointer.restore(
-            checkpoint_path=config.checkpointing.resume_from,
+            checkpoint_path=resume_path,
             template_train_state=train_state,
             template_key=key,
         )
@@ -153,7 +159,7 @@ def build_system(config: ExperimentConfig, runner_state_cls: type):
         )
         if restored_key is not None:
             key = restored_key
-        if config.checkpointing.transfer_weights_only:
+        if config.io.checkpoint.transfer_weights_only:
             train_state = TrainState(
                 params=train_state.params,
                 actor_opt_state=actor_optimizer.init(train_state.params.state),

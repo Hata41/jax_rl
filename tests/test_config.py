@@ -12,7 +12,8 @@ from jax_rl.configs.config import (
     CheckpointConfig,
     EnvConfig,
     ExperimentConfig,
-    LoggingConfig,
+    IOConfig,
+    LoggerConfig,
     SystemConfig,
     register_configs,
 )
@@ -29,6 +30,7 @@ def _to_typed_config(cfg) -> ExperimentConfig:
         "env",
         "arch",
         "system",
+        "io",
         "checkpointing",
         "logging",
         "network",
@@ -46,7 +48,14 @@ def _to_typed_config(cfg) -> ExperimentConfig:
         if isinstance(payload.get("checkpointing"), dict):
             payload["checkpointing"] = CheckpointConfig(**payload["checkpointing"])
         if isinstance(payload.get("logging"), dict):
-            payload["logging"] = LoggingConfig(**payload["logging"])
+            payload["logging"] = LoggerConfig(**payload["logging"])
+        if isinstance(payload.get("io"), dict):
+            io_payload = dict(payload["io"])
+            if isinstance(io_payload.get("checkpoint"), dict):
+                io_payload["checkpoint"] = CheckpointConfig(**io_payload["checkpoint"])
+            if isinstance(io_payload.get("logger"), dict):
+                io_payload["logger"] = LoggerConfig(**io_payload["logger"])
+            payload["io"] = IOConfig(**io_payload)
         return ExperimentConfig(**payload)
 
     if isinstance(obj, dict) and len(obj) == 1:

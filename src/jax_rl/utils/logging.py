@@ -337,8 +337,11 @@ class jaxRL_Logger:
         sinks: list[BaseLogger] = [ConsoleLogger()]
         warned: set[str] = set()
 
-        if getattr(getattr(config, "logging", None), "tensorboard_logdir", None):
-            run_dir = Path(config.logging.tensorboard_logdir) / config.logging.tensorboard_run_name
+        logger_cfg = getattr(getattr(config, "io", None), "logger", None)
+        run_name = getattr(getattr(config, "io", None), "name", None)
+        if logger_cfg is not None and getattr(logger_cfg, "tensorboard_logdir", None):
+            resolved_name = str(run_name) if run_name else str(config.system.name).lower()
+            run_dir = Path(logger_cfg.tensorboard_logdir) / resolved_name
             run_dir.mkdir(parents=True, exist_ok=True)
             try:
                 sinks.append(TensorBoardLogger(str(run_dir)))

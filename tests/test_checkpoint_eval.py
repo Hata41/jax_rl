@@ -11,7 +11,7 @@ from jax_rl.systems.ppo.eval import Evaluator, evaluate
 from jax_rl.systems.ppo.anakin.system import train
 from jax_rl.systems.ppo.anakin.factory import _init_train_state, _setup_environment
 from jax_rl.systems.ppo.update import make_actor_optimizer, make_critic_optimizer
-from jax_rl.utils.checkpoint import Checkpointer
+from jax_rl.utils.checkpoint import Checkpointer, resolve_resume_from
 from jax_rl.utils.exceptions import CheckpointRestoreError, ConfigDivisibilityError
 from jax_rl.networks import init_policy_value_params
 from jax_rl.utils.types import PolicyValueParams, TrainState
@@ -166,6 +166,48 @@ def test_restore_nonexistent_explicit_path_raises_checkpoint_restore_error(tmp_p
 
     with pytest.raises(CheckpointRestoreError, match="does not exist"):
         checkpointer.restore(checkpoint_path=str(missing_dir))
+
+
+def test_resolve_resume_from_supports_algo_prefixed_shorthand(tmp_path: Path):
+    env_token = "rlpallet_UldEnv_v2"
+    ppo_leaf = tmp_path / "ppo" / env_token / "20260306_191108" / "save_ppo" / "42"
+    spo_leaf = tmp_path / "spo" / env_token / "20260306_193210" / "spo_after" / "1"
+    ppo_leaf.mkdir(parents=True)
+    spo_leaf.mkdir(parents=True)
+
+    current_checkpoint_dir = tmp_path / "spo" / env_token / "20260306_200000" / "spo_after"
+
+    resolved_default = resolve_resume_from(
+        checkpoint_dir=str(current_checkpoint_dir),
+        env_name="rlpallet:UldEnv-v2",
+        resume_from="spo_after",
+        source_algo="spo",
+    )
+    assert resolved_default == str(spo_leaf.parent)
+
+    resolved_prefixed_ppo = resolve_resume_from(
+        checkpoint_dir=str(current_checkpoint_dir),
+        env_name="rlpallet:UldEnv-v2",
+        resume_from="ppo/save_ppo",
+        source_algo="spo",
+    )
+    assert resolved_prefixed_ppo == str(ppo_leaf.parent)
+
+
+def test_resolve_resume_from_returns_leaf_when_no_steps_exist(tmp_path: Path):
+    env_token = "rlpallet_UldEnv_v2"
+    ppo_leaf = tmp_path / "ppo" / env_token / "20260306_191108" / "save_ppo"
+    (ppo_leaf / "metadata").mkdir(parents=True)
+
+    current_checkpoint_dir = tmp_path / "spo" / env_token / "20260306_200000" / "spo_after"
+
+    resolved_prefixed_ppo = resolve_resume_from(
+        checkpoint_dir=str(current_checkpoint_dir),
+        env_name="rlpallet:UldEnv-v2",
+        resume_from="ppo/save_ppo",
+        source_algo="spo",
+    )
+    assert resolved_prefixed_ppo == str(ppo_leaf)
 
 
 @pytest.mark.integration

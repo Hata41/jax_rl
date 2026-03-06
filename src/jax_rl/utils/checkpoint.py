@@ -18,6 +18,96 @@ class RestorePayload(TypedDict):
     metadata: dict[str, Any]
 
 
+_ALGO_NAMES = {"ppo", "spo", "alphazero"}
+
+
+def _sanitize_run_token(value: str) -> str:
+    return (
+        str(value)
+        .replace(":", "_")
+        .replace("-", "_")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace(" ", "_")
+    )
+
+
+def _infer_checkpoint_root_and_env(checkpoint_dir: str, env_name: str) -> tuple[Path, str]:
+    path = Path(checkpoint_dir)
+    parts = path.parts
+
+    algo_index: int | None = None
+    for idx, part in enumerate(parts):
+        if part in _ALGO_NAMES and idx + 1 < len(parts):
+            algo_index = idx
+            break
+
+    if algo_index is None:
+        return Path("checkpoints"), _sanitize_run_token(env_name)
+
+    root = Path(parts[0])
+    for part in parts[1:algo_index]:
+        root /= part
+    return root, _sanitize_run_token(env_name)
+
+
+def resolve_resume_from(
+    *,
+    checkpoint_dir: str,
+    env_name: str,
+    resume_from: str,
+    source_algo: str,
+) -> str:
+    """Resolve shorthand checkpoint names to latest run/step path.
+
+    If `resume_from` already points to an existing directory, it is returned unchanged.
+    Otherwise, `resume_from` can be:
+    - `<name>`: resolved as latest run leaf for `source_algo`
+    - `<algo>/<name>`: resolved as latest run leaf for the explicit `algo`
+      where algo in {ppo, spo, alphazero}
+    - any other multi-segment path: returned unchanged
+    """
+    target = Path(resume_from).expanduser()
+    if target.is_dir():
+        return str(target)
+
+    resolved_algo = str(source_algo).lower()
+    leaf_name = resume_from
+    if len(target.parts) == 2 and target.parts[0].lower() in _ALGO_NAMES:
+        resolved_algo = target.parts[0].lower()
+        leaf_name = target.parts[1]
+    elif len(target.parts) > 1:
+        return str(target)
+
+    checkpoint_root, env_token = _infer_checkpoint_root_and_env(checkpoint_dir, env_name)
+    base = checkpoint_root / resolved_algo / env_token
+    if not base.is_dir():
+        return str(target)
+
+    candidate_runs = sorted(
+        [run_dir for run_dir in base.iterdir() if run_dir.is_dir()],
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    fallback_leaf: str | None = None
+    for run_dir in candidate_runs:
+        leaf = run_dir / leaf_name
+        if not leaf.is_dir():
+            continue
+        if fallback_leaf is None:
+            fallback_leaf = str(leaf)
+        has_numeric_step = any(
+            child.is_dir() and child.name.isdigit() for child in leaf.iterdir()
+        )
+        if has_numeric_step:
+            return str(leaf)
+
+    if fallback_leaf is not None:
+        return fallback_leaf
+
+    return str(target)
+
+
 @contextmanager
 def _suppress_orbax_startup_logs():
     absl_logger = logging.getLogger("absl")
@@ -59,7 +149,7 @@ class Checkpointer:
         save_interval_steps: int = 0,
         metadata: dict[str, Any] | None = None,
     ):
-        self._checkpoint_dir = Path(checkpoint_dir)
+        self._checkpoint_dir = Path(checkpoint_dir).expanduser().resolve()
         self._metadata = metadata or {}
         json.dumps(self._metadata)
         self._checkpointer = ocp.PyTreeCheckpointer()
@@ -104,7 +194,7 @@ class Checkpointer:
         self,
         timestep: int | None = None,
         checkpoint_path: str | None = None,
-        template_train_state: TrainState | None = None,
+        template_train_state: Any | None = None,
         template_key=None,
     ) -> dict[str, Any]:
         """Restore training state from an explicit path or this manager's directory."""
@@ -114,7 +204,7 @@ class Checkpointer:
 
         if checkpoint_path is not None:
             restored_payload = self._restore_from_explicit_path(
-                target=Path(checkpoint_path),
+                target=Path(checkpoint_path).expanduser().resolve(),
                 timestep=timestep,
                 template_items=template_items,
             )
@@ -128,10 +218,13 @@ class Checkpointer:
         step = restored_payload["step"]
         metadata = restored_payload["metadata"]
 
-        train_state = self._coerce_train_state(restored["train_state"])
+        train_state_payload = restored["train_state"]
+        if isinstance(template_train_state, TrainState):
+            train_state = self._coerce_train_state(train_state_payload)
+            self._validate_train_state(train_state)
+        else:
+            train_state = train_state_payload
         key = restored["key"]
-
-        self._validate_train_state(train_state)
 
         return {
             "step": int(step),

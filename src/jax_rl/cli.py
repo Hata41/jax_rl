@@ -1,5 +1,4 @@
 from pathlib import Path
-import time
 from typing import Any
 from dataclasses import asdict
 
@@ -12,7 +11,8 @@ from .configs.config import (
     CheckpointConfig,
     EnvConfig,
     ExperimentConfig,
-    LoggingConfig,
+    IOConfig,
+    LoggerConfig,
     SystemConfig,
     register_configs,
 )
@@ -55,27 +55,24 @@ def inject_run_id(
     preserve_tensorboard_run_name: bool = False,
     run_name_override: str | None = None,
 ) -> tuple[ExperimentConfig, str]:
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    run_token_source = run_name_override if run_name_override else timestamp
-    run_token = _sanitize_run_token(run_token_source)
-    safe_env_name = _sanitize_run_token(config.env.env_name)
-    run_id = f"{config.system.name}_{safe_env_name}_{run_token}"
+    del preserve_tensorboard_run_name, run_name_override
 
-    checkpoint_path = (
-        Path(config.checkpointing.checkpoint_dir)
-        / str(config.system.name)
-        / safe_env_name
-        / run_token
-    )
-    checkpoint_name = getattr(config.checkpointing, "checkpoint_name", None)
-    if checkpoint_name:
-        checkpoint_path = checkpoint_path / _sanitize_run_token(checkpoint_name)
+    if getattr(config, "checkpointing", None) is not None:
+        config.io.checkpoint = config.checkpointing
+        if config.io.name is None and getattr(config.checkpointing, "checkpoint_name", None):
+            config.io.name = str(config.checkpointing.checkpoint_name)
+    if getattr(config, "logging", None) is not None:
+        config.io.logger = config.logging
+        if config.io.name is None and getattr(config.logging, "tensorboard_run_name", None):
+            config.io.name = str(config.logging.tensorboard_run_name)
 
-    config.checkpointing.checkpoint_dir = str(checkpoint_path)
+    system_name = _sanitize_run_token(str(config.system.name).lower())
+    io_name = _sanitize_run_token(str(config.io.name)) if config.io.name else system_name
+    checkpoint_path = Path(config.io.checkpoint.checkpoint_dir) / system_name / io_name
 
-    if config.logging.tensorboard_logdir and not preserve_tensorboard_run_name:
-        config.logging.tensorboard_run_name = run_id
-
+    config.io.checkpoint.checkpoint_dir = str(checkpoint_path)
+    config.io.name = io_name
+    run_id = f"{system_name}_{io_name}"
     return config, run_id
 
 
@@ -111,20 +108,47 @@ def main(cfg: DictConfig) -> None:
             payload["system"] = SystemConfig(**system_value)
 
         checkpoint_value = payload.get("checkpointing")
-        if isinstance(checkpoint_value, dict):
-            payload["checkpointing"] = CheckpointConfig(**checkpoint_value)
-
         logging_value = payload.get("logging")
-        if isinstance(logging_value, dict):
-            payload["logging"] = LoggingConfig(**logging_value)
+        io_value = payload.get("io")
+
+        if io_value is not None and (checkpoint_value is not None or logging_value is not None):
+            raise ValueError(
+                "Config defines both legacy keys ('logging'/'checkpointing') and new key ('io'). "
+                "Use only 'io'."
+            )
+
+        if isinstance(io_value, dict):
+            io_payload = dict(io_value)
+            checkpoint_payload = io_payload.get("checkpoint")
+            if isinstance(checkpoint_payload, dict):
+                io_payload["checkpoint"] = CheckpointConfig(**checkpoint_payload)
+            logger_payload = io_payload.get("logger")
+            if isinstance(logger_payload, dict):
+                io_payload["logger"] = LoggerConfig(**logger_payload)
+            payload["io"] = IOConfig(**io_payload)
+        elif io_value is None and (checkpoint_value is not None or logging_value is not None):
+            io_payload: dict[str, Any] = {}
+            if isinstance(checkpoint_value, dict):
+                io_payload["checkpoint"] = CheckpointConfig(**checkpoint_value)
+                legacy_checkpoint_name = checkpoint_value.get("checkpoint_name")
+                if legacy_checkpoint_name:
+                    io_payload["name"] = str(legacy_checkpoint_name)
+            if isinstance(logging_value, dict):
+                io_payload["logger"] = LoggerConfig(
+                    log_every=int(logging_value.get("log_every", 10)),
+                    tensorboard_logdir=logging_value.get("tensorboard_logdir"),
+                )
+                legacy_tb_name = logging_value.get("tensorboard_run_name")
+                if legacy_tb_name and "name" not in io_payload:
+                    io_payload["name"] = str(legacy_tb_name)
+            payload["io"] = IOConfig(**io_payload)
 
         return ExperimentConfig(**payload)
     expected_keys = {
         "env",
         "arch",
         "system",
-        "checkpointing",
-        "logging",
+        "io",
         "network",
         "evaluations",
     }
@@ -148,7 +172,8 @@ def main(cfg: DictConfig) -> None:
                     continue
                 root_value = typed[root_key]
                 if isinstance(root_value, ExperimentConfig):
-                    merged = asdict(root_value)
+                    merged_full = asdict(root_value)
+                    merged = {key: merged_full[key] for key in expected_keys if key in merged_full}
                 elif isinstance(root_value, dict):
                     merged = {str(k): v for k, v in root_value.items()}
                 else:
@@ -169,16 +194,8 @@ def main(cfg: DictConfig) -> None:
             f"Hydra config did not resolve to ExperimentConfig. Got: {type(typed)}"
         )
 
-    hydra_overrides = HydraConfig.get().overrides.task
-    preserve_tb_run_name = _has_explicit_tensorboard_run_name_override(hydra_overrides)
-    run_name_override = (
-        str(config.logging.tensorboard_run_name) if preserve_tb_run_name else None
-    )
-    config, run_id = inject_run_id(
-        config,
-        preserve_tensorboard_run_name=preserve_tb_run_name,
-        run_name_override=run_name_override,
-    )
+    _ = HydraConfig.get().overrides.task
+    config, run_id = inject_run_id(config)
     print(f"Starting run: {run_id}")
 
     system_name = str(config.system.name).lower()

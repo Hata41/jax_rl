@@ -7,24 +7,20 @@ defaults:
 env:
   seed: 0
   env_kwargs:
-    target_groups: 10
-    max_items: 10
-    max_ems: 40
-    max_episode_steps: 30
-    generator_type: twophase_physics
-    max_mult: 5
-    prob_split_one_item: 0.3
-    split_num_same_items: 6
-    min_dimension: 100
-    dataset_path: data/eval_data.csv
-    uld_preset: PMC-PLD
+    max_episode_steps: 25
 
 arch:
   total_timesteps: 2048
   platform: null
   cuda_visible_devices: null
   num_envs: 8
-  num_steps: 32
+  num_steps: 25
+
+system:
+  gamma: 1.0
+  entropy_coef: 0.03
+  update_epochs: 2
+  minibatch_size: 16
 
 network:
   _delete_: true
@@ -45,52 +41,34 @@ network:
     _target_: jax_rl.networks.BinPackCriticHead
     hidden_dim: 16
 
-checkpointing:
-  checkpoint_dir: checkpoints
-  checkpoint_name: null
-  transfer_weights_only: false
-  save_interval_steps: 0
-  max_to_keep: 1
-  keep_period: null
-  resume_from: null
-
-logging:
-  log_every: 1
-  tensorboard_logdir: runs_tb
-  tensorboard_run_name: ppo_uldenv
+io:
+  # Shared name used for both TensorBoard run folder and checkpoint save folder.
+  # If null, defaults to the system name.
+  name: save_ppo
+  logger:
+    log_every: 1
+    tensorboard_logdir: runs_tb
+  checkpoint:
+    # Output root; runtime writes: <system>/<name>
+    checkpoint_dir: checkpoints
+    # false: full resume (state + optimizer + key), true: params-only init
+    transfer_weights_only: false
+    # Save every N updates (0 = disabled)
+    save_interval_steps: 1
+    max_to_keep: 1
+    keep_period: null
+    # resume_from accepted forms:
+    # - name: save_ppo
+    # - algo/name: ppo/save_ppo, spo/spo_after
+    # - run dir: /.../save_ppo
+    # - step dir: /.../save_ppo/42
+    # For name or algo/name, latest run for this env is used.
+    resume_from: null
 
 evaluations:
   default_eval:
     env: ${env}
-    env_kwargs:
-      max_items: 10
-      target_groups: 10
-    eval_every: 1
-    num_episodes: 160
-    max_steps_per_episode: 30
-    greedy: true
-
-  stress_eval:
-    env: ${env}
-    env_kwargs:
-      max_items: 25
-      max_ems: 50
-      max_episode_steps: 25
-      uld_preset: PMC-PLD
-      generator_type: twophase_physics
-      target_groups: 5
-      max_mult: 5
-      prob_split_one_item: 0.3
-      split_num_same_items: 6
-      min_dimension: 100
-      min_density: 1e-9
-      max_density: 1e-2
-      dataset_path: data/eval_data.csv
-      reward_type: dense
-      action_mode: Oriented
-      item_representation: Group
-      parallel_strategy: None
-    eval_every: 1
-    num_episodes: 160
-    max_steps_per_episode: 40
+    eval_every: 10
+    num_episodes: 16
+    max_steps_per_episode: 25
     greedy: true

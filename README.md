@@ -51,17 +51,20 @@ arch:
   num_envs: 8
   num_steps: 32
 
-checkpointing:
-  checkpoint_dir: checkpoints
-  save_interval_steps: 0
-  max_to_keep: 1
-  keep_period: null
-  resume_from: null
-
-logging:
-  log_every: 1
-  tensorboard_logdir: runs_tb
-  tensorboard_run_name: default
+io:
+  # shared run name for both TensorBoard and checkpoint folder
+  # if null, defaults to system name
+  name: ppo_binpack
+  logger:
+    log_every: 1
+    tensorboard_logdir: runs_tb
+  checkpoint:
+    checkpoint_dir: checkpoints
+    transfer_weights_only: false
+    save_interval_steps: 0
+    max_to_keep: 1
+    keep_period: null
+    resume_from: null
 
 network:
   _target_: jax_rl.networks.PolicyValueModel
@@ -97,7 +100,7 @@ uv run jax-rl-train arch.platform=cuda arch.cuda_visible_devices='0,1'
 
 ## Config Choices Quick Reference
 
-- `system.name`: `ppo` | `alphazero`
+- `system.name`: `ppo` | `spo` | `alphazero`
 - `env.env_name` patterns:
   - `rustpool:<task_id>` (example: `rustpool:BinPack-v0`)
   - `rlpallet:<task_id>` (example: `rlpallet:UldEnv-v2`)
@@ -111,16 +114,15 @@ uv run jax-rl-train arch.platform=cuda arch.cuda_visible_devices='0,1'
 
 Runtime behavior for outputs:
 
-- Run id is auto-generated as `{system.name}_{safe_env_name}_{run_token}`.
-- `run_token` is timestamp by default, or sanitized CLI `logging.tensorboard_run_name` if explicitly set.
-- `checkpointing.checkpoint_dir` is auto-expanded to `<base>/<system.name>/<safe_env_name>/<run_token>`.
-- Optional `checkpointing.checkpoint_name` adds a final subfolder (example: `best_model`).
-- `logging.tensorboard_run_name` is auto-set to run id unless explicitly overridden from CLI.
-- `checkpointing.resume_from` stays exactly as provided (never rewritten by run-id injection).
+- Run id is `"<system>_<io.name>"`.
+- If `io.name` is null, it defaults to `system.name`.
+- `io.checkpoint.checkpoint_dir` is auto-expanded to `"<base>/<system>/<io.name>"`.
+- TensorBoard writes to `"<io.logger.tensorboard_logdir>/<io.name>"`.
+- `io.checkpoint.resume_from` supports shorthand names and is resolved at runtime.
 
 Example CLI override:
 
-- `uv run jax-rl-train checkpointing.checkpoint_name=best_model`
+- `uv run jax-rl-train io.name=exp_001 io.checkpoint.save_interval_steps=1`
 
 ## Evaluation Profiles
 
@@ -160,9 +162,10 @@ Environment constructor signature:
 ## TensorBoard
 
 ```yaml
-logging:
-  tensorboard_logdir: runs_tb
-  tensorboard_run_name: exp_001
+io:
+  name: exp_001
+  logger:
+    tensorboard_logdir: runs_tb
 ```
 
 ```bash
@@ -172,10 +175,16 @@ tensorboard --logdir runs_tb
 ## Checkpoint Resume
 
 ```yaml
-checkpointing:
-  checkpoint_dir: checkpoints
-  save_interval_steps: 100
-  resume_from: checkpoints
+io:
+  checkpoint:
+    checkpoint_dir: checkpoints
+    save_interval_steps: 100
+    # accepted forms:
+    # - name: save_ppo
+    # - algo/name: ppo/save_ppo, spo/spo_after
+    # - run dir: /.../save_ppo
+    # - step dir: /.../save_ppo/42
+    resume_from: ppo/save_ppo
 ```
 
 Training continues up to `arch.total_timesteps`.
@@ -243,7 +252,7 @@ CLI entrypoint: `src/jax_rl/cli.py`
 
 Flow:
 
-1. Compose Hydra config from `config/train.yaml`.
+1. Compose Hydra config from a selected config name (for example `binpack/ppo` or `uldenv/spo`).
 2. Apply runtime env vars early from raw config if provided (`arch.platform`, `arch.cuda_visible_devices`).
 3. Convert composed config to typed `ExperimentConfig`.
 4. Run `train(config)` and optional evaluation profiles.
@@ -255,8 +264,10 @@ Root config is `ExperimentConfig` with namespaces:
 - `env`: `env_name`, `seed`, `env_kwargs`
 - `arch`: shared architecture/hardware settings (`total_timesteps`, `platform`, `cuda_visible_devices`, `num_envs`, `num_steps`)
 - `system`: algorithm hyperparameters
-- `checkpointing`: checkpoint settings
-- `logging`: logger and tensorboard settings
+- `io`: unified runtime output settings
+  - `io.name`: shared run/checkpoint name
+  - `io.logger`: logging settings
+  - `io.checkpoint`: checkpoint settings
 - root maps: `network`, `evaluations`
 
 ### Environment Routing

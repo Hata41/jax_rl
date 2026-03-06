@@ -23,19 +23,29 @@ network:
   num_heads: 1
   num_layers: 1
 
-checkpointing:
-  checkpoint_dir: checkpoints
-  checkpoint_name: null
-  transfer_weights_only: false
-  save_interval_steps: 0
-  max_to_keep: 1
-  keep_period: null
-  resume_from: null
-
-logging:
-  log_every: 1
-  tensorboard_logdir: runs_tb
-  tensorboard_run_name: ppo_binpack
+io:
+  # Shared name used for both TensorBoard run folder and checkpoint save folder.
+  # If null, defaults to the system name.
+  name: ppo_binpack
+  logger:
+    log_every: 1
+    tensorboard_logdir: runs_tb
+  checkpoint:
+    # Output root; runtime writes: <system>/<name>
+    checkpoint_dir: checkpoints
+    # false: full resume (state + optimizer + key), true: params-only init
+    transfer_weights_only: false
+    # Save every N updates (0 = disabled)
+    save_interval_steps: 1
+    max_to_keep: 1
+    keep_period: null
+    # resume_from accepted forms:
+    # - name: save_ppo
+    # - algo/name: ppo/save_ppo, spo/spo_after
+    # - run dir: /.../save_ppo
+    # - step dir: /.../save_ppo/42
+    # For name or algo/name, latest run for this env is used.
+    resume_from: null
 
 evaluations:
   default_eval:

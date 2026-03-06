@@ -10,11 +10,11 @@ env:
   env_kwargs:
     # --- Observation Space Capacities (V2 Specific) ---
     # target_groups: (Integer) Fixed size of the grouped observation space (max unique SKUs)
-    target_groups: 32      
+    target_groups: 5       
     # max_items: (Integer) Physical tracking capacity for rendering/sim (must be >= target_groups)
     max_items: 25          
     # max_ems: (Integer) Capacity for Empty Maximal Spaces tracking
-    max_ems: 60            
+    max_ems: 50            
 
     # --- Procedural Generation (Training) ---
     # generator_type choices:
@@ -51,24 +51,3 @@ env:
     # - "floor_plan": Dense volume + reward for creating wide flat surfaces
     reward_type: "dense"   
 
-# --- Base Evaluations Block ---
-evaluations:
-  eval_dataset:
-    env: ${env}
-    num_episodes: 100
-    eval_every: 50
-    greedy: true
-    # action_selection choices: 
-    # - "policy": Standard network forward pass (fast)
-    # - "search": AlphaZero/SPO MCTS search (requires anakin SPO runner)
-    action_selection: "search" 
-    env_kwargs:
-      # Override generator for deterministic dataset replay during evaluation
-      generator_type: "dataset"
-      dataset_path: "data/uldenv_eval_data.csv"
-      
-      # Inherit capacities from training to perfectly match network dimensions
-      target_groups: 32
-      max_items: 50
-      max_ems: 60
-      uld_preset: "PMC-PLD"

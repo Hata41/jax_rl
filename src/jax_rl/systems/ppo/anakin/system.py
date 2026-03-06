@@ -40,9 +40,10 @@ def train(config: ExperimentConfig):
 
     logger = jaxRL_Logger.from_config(config)
     logger.log_config(config)
+    run_name = str(config.io.name) if config.io.name else str(config.system.name).lower()
     tensorboard_run_dir = (
-        str(config.logging.tensorboard_logdir + "/" + config.logging.tensorboard_run_name)
-        if config.logging.tensorboard_logdir
+        str(config.io.logger.tensorboard_logdir + "/" + run_name)
+        if config.io.logger.tensorboard_logdir
         else None
     )
 
@@ -122,8 +123,8 @@ def train(config: ExperimentConfig):
                 merged_metrics.update(logger.materialize(eval_metrics, LogEvent.EVAL))
             latest_metrics = merged_metrics
 
-            if config.checkpointing.save_interval_steps > 0 and (
-                (global_update_idx + 1) % config.checkpointing.save_interval_steps == 0
+            if config.io.checkpoint.save_interval_steps > 0 and (
+                (global_update_idx + 1) % config.io.checkpoint.save_interval_steps == 0
                 or local_update_idx == remaining_updates - 1
             ):
                 train_state_to_save = unreplicate_tree(runner_state.train_state)

@@ -82,10 +82,20 @@ class CheckpointConfig:
 
 
 @dataclass
-class LoggingConfig:
+class LoggerConfig:
     log_every: int = 10
     tensorboard_logdir: str | None = None
-    tensorboard_run_name: str = "default"
+    tensorboard_run_name: str | None = None
+
+
+@dataclass
+class IOConfig:
+    name: str | None = None
+    logger: LoggerConfig = field(default_factory=LoggerConfig)
+    checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
+
+
+LoggingConfig = LoggerConfig
 
 
 @dataclass
@@ -93,8 +103,9 @@ class ExperimentConfig:
     env: EnvConfig = field(default_factory=EnvConfig)
     arch: ArchConfig = field(default_factory=ArchConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
+    io: IOConfig = field(default_factory=IOConfig)
     checkpointing: CheckpointConfig = field(default_factory=CheckpointConfig)
-    logging: LoggingConfig = field(default_factory=LoggingConfig)
+    logging: LoggerConfig = field(default_factory=LoggerConfig)
 
     network: dict[str, Any] = field(
         default_factory=lambda: {
@@ -104,6 +115,15 @@ class ExperimentConfig:
     )
 
     evaluations: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.io.checkpoint = self.checkpointing
+        if self.io.name is None and self.checkpointing.checkpoint_name:
+            self.io.name = self.checkpointing.checkpoint_name
+
+        self.io.logger = self.logging
+        if self.io.name is None and self.logging.tensorboard_run_name:
+            self.io.name = self.logging.tensorboard_run_name
 
     @property
     def rollout_batch_size(self) -> int:

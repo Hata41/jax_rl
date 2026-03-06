@@ -14,10 +14,11 @@ from ....configs.config import ExperimentConfig
 from ....envs.env import make_stoa_env
 from ....networks import init_policy_value_params
 from ....systems.ppo.update import make_actor_optimizer, make_critic_optimizer
-from ....utils.checkpoint import Checkpointer
-from ....utils.exceptions import ConfigDivisibilityError
-from ....utils.jax_utils import replicate_tree
+from ....utils.checkpoint import Checkpointer, resolve_resume_from
+from ....utils.exceptions import CheckpointRestoreError, ConfigDivisibilityError
+from ....utils.jax_utils import normalize_restored_train_state_and_key, replicate_tree
 from ....utils.shapes import space_feature_dim, space_flat_dim
+from ....utils.types import PolicyValueParams, TrainState
 from ..types import CategoricalDualParams, SPOOptStates, SPOParams, SPOTrainState, SPOTransition
 
 
@@ -61,6 +62,95 @@ def _make_dummy_transition(obs, num_particles: int) -> SPOTransition:
             "released_state_ids": jnp.asarray(0.0, dtype=jnp.float32),
             "invalid_action_rate": jnp.asarray(0.0, dtype=jnp.float32),
         },
+    )
+
+
+def _coerce_policy_value_params(payload: Any) -> PolicyValueParams:
+    if isinstance(payload, PolicyValueParams):
+        return payload
+    if isinstance(payload, dict) and {"graphdef", "state"}.issubset(payload):
+        return PolicyValueParams(graphdef=payload["graphdef"], state=payload["state"])
+    raise CheckpointRestoreError(
+        "Checkpoint params payload does not match expected PolicyValueParams structure."
+    )
+
+
+def _coerce_spo_params(payload: Any) -> SPOParams:
+    if isinstance(payload, SPOParams):
+        return payload
+    if not isinstance(payload, dict):
+        raise CheckpointRestoreError(
+            "Checkpoint payload for SPO params must be SPOParams or dict."
+        )
+    required = {
+        "actor_online",
+        "actor_target",
+        "critic_online",
+        "critic_target",
+        "dual_params",
+    }
+    missing = required - set(payload.keys())
+    if missing:
+        raise CheckpointRestoreError(
+            "Checkpoint payload for SPO params is missing required keys: "
+            + ", ".join(sorted(missing))
+        )
+    return SPOParams(
+        actor_online=_coerce_policy_value_params(payload["actor_online"]),
+        actor_target=_coerce_policy_value_params(payload["actor_target"]),
+        critic_online=_coerce_policy_value_params(payload["critic_online"]),
+        critic_target=_coerce_policy_value_params(payload["critic_target"]),
+        dual_params=payload["dual_params"],
+    )
+
+
+def _coerce_spo_train_state(payload: Any) -> SPOTrainState:
+    if isinstance(payload, SPOTrainState):
+        return payload
+    if not isinstance(payload, dict):
+        raise CheckpointRestoreError(
+            "Checkpoint payload for SPO train_state must be SPOTrainState or dict."
+        )
+    if {"params", "opt_states"}.issubset(payload):
+        return SPOTrainState(
+            params=_coerce_spo_params(payload["params"]),
+            opt_states=payload["opt_states"],
+        )
+    raise CheckpointRestoreError(
+        "Checkpoint payload for SPO train_state is missing required keys: params, opt_states."
+    )
+
+
+def _extract_transfer_spo_params(restored_train_state: Any, current_dual_params: CategoricalDualParams) -> SPOParams:
+    if isinstance(restored_train_state, SPOTrainState):
+        return restored_train_state.params
+
+    if isinstance(restored_train_state, dict) and {"params", "opt_states"}.issubset(restored_train_state):
+        return _coerce_spo_train_state(restored_train_state).params
+
+    if isinstance(restored_train_state, TrainState):
+        ppo_params = restored_train_state.params
+        return SPOParams(
+            actor_online=ppo_params,
+            actor_target=ppo_params,
+            critic_online=ppo_params,
+            critic_target=ppo_params,
+            dual_params=current_dual_params,
+        )
+
+    if isinstance(restored_train_state, dict) and "params" in restored_train_state:
+        ppo_params = _coerce_policy_value_params(restored_train_state["params"])
+        return SPOParams(
+            actor_online=ppo_params,
+            actor_target=ppo_params,
+            critic_online=ppo_params,
+            critic_target=ppo_params,
+            dual_params=current_dual_params,
+        )
+
+    raise CheckpointRestoreError(
+        "Unsupported checkpoint train_state type for SPO transfer_weights_only. "
+        "Expected SPOTrainState or PPO TrainState-compatible payload."
     )
 
 
@@ -152,12 +242,57 @@ def build_system(config: ExperimentConfig, runner_state_cls: type):
     train_state = SPOTrainState(params=params, opt_states=opt_states)
 
     checkpointer = Checkpointer(
-        checkpoint_dir=config.checkpointing.checkpoint_dir,
-        max_to_keep=config.checkpointing.max_to_keep,
-        keep_period=config.checkpointing.keep_period,
-        save_interval_steps=config.checkpointing.save_interval_steps,
+        checkpoint_dir=config.io.checkpoint.checkpoint_dir,
+        max_to_keep=config.io.checkpoint.max_to_keep,
+        keep_period=config.io.checkpoint.keep_period,
+        save_interval_steps=config.io.checkpoint.save_interval_steps,
         metadata={"config": asdict(config)},
     )
+
+    if config.io.checkpoint.resume_from:
+        source_algo = "ppo" if config.io.checkpoint.transfer_weights_only else "spo"
+        resume_path = resolve_resume_from(
+            checkpoint_dir=config.io.checkpoint.checkpoint_dir,
+            env_name=config.env.env_name,
+            resume_from=config.io.checkpoint.resume_from,
+            source_algo=source_algo,
+        )
+        if config.io.checkpoint.transfer_weights_only:
+            ppo_template_state = TrainState(
+                params=params.actor_online,
+                actor_opt_state=actor_optimizer.init(params.actor_online.state),
+                critic_opt_state=critic_optimizer.init(params.actor_online.state),
+            )
+            payload = checkpointer.restore(
+                checkpoint_path=resume_path,
+                template_train_state=ppo_template_state,
+                template_key=key,
+            )
+            transferred_params = _extract_transfer_spo_params(
+                payload["train_state"],
+                current_dual_params=params.dual_params,
+            )
+            params = transferred_params
+            opt_states = SPOOptStates(
+                actor_opt_state=actor_optimizer.init(params.actor_online.state),
+                critic_opt_state=critic_optimizer.init(params.critic_online.state),
+                dual_opt_state=dual_optimizer.init(params.dual_params),
+            )
+            train_state = SPOTrainState(params=params, opt_states=opt_states)
+        else:
+            payload = checkpointer.restore(
+                checkpoint_path=resume_path,
+                template_train_state=train_state,
+                template_key=key,
+            )
+            restored_train_state = _coerce_spo_train_state(payload["train_state"])
+            _, restored_key = normalize_restored_train_state_and_key(
+                restored_train_state,
+                payload["key"],
+            )
+            train_state = restored_train_state
+            if restored_key is not None:
+                key = restored_key
 
     fbx = importlib.import_module("flashbax")
     key, buffer_reset_key = jax.random.split(key)
