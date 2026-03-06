@@ -194,28 +194,18 @@ def release_rustpool_embeddings(*, env: Any, state: Any, search_tree: Any) -> ja
     if not hasattr(env, "release_batch"):
         raise EnvironmentInterfaceError("Rustpool cleanup requires 'release_batch(state, state_ids)'.")
 
+    # 1. Flatten the search tree node embeddings and visitation mask
     flat_ids = jnp.asarray(search_tree.embeddings, dtype=jnp.int32).reshape(-1)
     valid_mask = jnp.asarray(search_tree.node_visits).reshape(-1) > 0
-    state_array = jnp.asarray(state, dtype=jnp.int32)
-
-    from jax.experimental import io_callback
-
-    def _release_callback(state_np, ids_np, mask_np):
-        valid_ids = ids_np[np.asarray(mask_np, dtype=np.bool_)]
-        if valid_ids.size == 0:
-            return np.int32(0)
-        unique_ids = np.unique(valid_ids).astype(np.int32, copy=False)
-        env.release_batch(state_np.astype(np.int32, copy=False), unique_ids)
-        return np.int32(unique_ids.size)
-
-    return io_callback(
-        _release_callback,
-        jax.ShapeDtypeStruct((), jnp.int32),
-        state_array,
-        flat_ids,
-        valid_mask,
-    )
-
+    
+    # 2. Mask out unvisited nodes with -1. 
+    # Rust's HashMap::remove will safely ignore -1 (usize::MAX).
+    safe_ids = jnp.where(valid_mask, flat_ids, -1)
+    
+    # 3. Call the wrapper natively!
+    # The Stoa wrapper's internal io_callback will now correctly trace 
+    # and resolve jax.lax.axis_index("device") just like it does in PPO.
+    return env.release_batch(state, safe_ids)
 
 def assert_finite_search_output(search_output: Any) -> None:
     is_finite = search_output_is_finite(search_output)

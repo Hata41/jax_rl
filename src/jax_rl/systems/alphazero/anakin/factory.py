@@ -34,10 +34,8 @@ class AlphaZeroComponents(NamedTuple):
 
 
 def _replicate_tree(tree, num_devices: int):
-    return jax.tree_util.tree_map(
-        lambda x: jnp.broadcast_to(x, (num_devices,) + x.shape),
-        tree,
-    )
+    from flax.jax_utils import replicate
+    return replicate(tree)
 
 
 def _infer_action_dims(action_space) -> int | tuple[int, ...]:

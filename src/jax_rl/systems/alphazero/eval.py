@@ -33,10 +33,8 @@ def _zero_metrics() -> dict[str, float | int]:
 
 
 def _replicate_tree(tree, num_devices: int):
-    return jax.tree_util.tree_map(
-        lambda x: jnp.broadcast_to(jnp.asarray(x), (num_devices,) + jnp.asarray(x).shape),
-        tree,
-    )
+    from flax.jax_utils import replicate
+    return replicate(tree)
 
 
 def _is_replicated_state(state, num_devices: int) -> bool:
