@@ -3,15 +3,20 @@ defaults:
   - _self_
 
 env:
+  # Supported env patterns in this repo: rustpool:<TaskId>, rlpallet:<TaskId>, jaxpallet:<Preset>
+  # Gymnax fallback is also supported when env_name has no registered prefix.
   env_name: rustpool:BinPack-v0
   seed: 0
   env_kwargs:
     max_items: 20
 
 system:
+  # Choices: ppo | alphazero
   name: ppo
   total_timesteps: 2048000
+  # Choices: null (auto), cpu, gpu, tpu
   platform: null
+  # Choices: null or GPU id list string (examples: "0", "0,1")
   cuda_visible_devices: null
   num_envs: 64
   num_steps: 32
@@ -34,15 +39,19 @@ network:
   num_layers: 1
 
 checkpointing:
+  # Runtime appends: <checkpoint_dir>/<system.name>/<safe_env_name>/<timestamp>
   checkpoint_dir: checkpoints
   save_interval_steps: 0
   max_to_keep: 1
   keep_period: null
+  # If set, loads weights from this exact path; it is not mutated by runtime path injection.
   resume_from: null
 
 logging:
   log_every: 1
+  # Choices: null to disable TensorBoard, or a base directory (example: runs_tb)
   tensorboard_logdir: runs_tb
+  # Runtime sets this to unique run_id unless explicitly overridden from CLI.
   tensorboard_run_name: ppo_binpack
 
 evaluations:

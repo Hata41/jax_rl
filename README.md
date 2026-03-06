@@ -90,6 +90,27 @@ uv run jax-rl-train system.platform=cpu
 uv run jax-rl-train system.platform=cuda system.cuda_visible_devices='0,1'
 ```
 
+## Config Choices Quick Reference
+
+- `system.name`: `ppo` | `alphazero`
+- `env.env_name` patterns:
+  - `rustpool:<task_id>` (example: `rustpool:BinPack-v0`)
+  - `rlpallet:<task_id>` (example: `rlpallet:UldEnv-v2`)
+  - `jaxpallet:<preset>` (example: `jaxpallet:PMC-PLD`)
+  - Gymnax fallback id (example: `CartPole-v1`)
+- `system.platform`: `null` (auto) | `cpu` | `gpu` | `tpu`
+- `system.cuda_visible_devices`: `null` or a GPU id list string (example: `'0'`, `'0,1'`)
+- AlphaZero only:
+  - `system.search_method`: `muzero` | `gumbel`
+  - `evaluations.<name>.action_selection`: `policy` | `search`
+
+Runtime behavior for outputs:
+
+- Run id is auto-generated as `{system.name}_{safe_env_name}_{timestamp}`.
+- `checkpointing.checkpoint_dir` is auto-expanded to `<base>/<system.name>/<safe_env_name>/<timestamp>`.
+- `logging.tensorboard_run_name` is auto-set to run id unless explicitly overridden from CLI.
+- `checkpointing.resume_from` stays exactly as provided (never rewritten by run-id injection).
+
 ## Evaluation Profiles
 
 Global env kwargs are inherited by evaluation unless overridden per profile.

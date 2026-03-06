@@ -1,7 +1,9 @@
 from pathlib import Path
+import time
 from typing import Any
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from .configs.config import ExperimentConfig, register_configs
@@ -12,6 +14,40 @@ configure_jax_runtime_defaults()
 register_configs()
 
 _CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "config")
+
+
+def _has_explicit_tensorboard_run_name_override(overrides: list[str] | None) -> bool:
+    if not overrides:
+        return False
+    for override in overrides:
+        key = override.split("=", 1)[0].lstrip("+")
+        if key == "logging.tensorboard_run_name" or key.endswith(
+            ".logging.tensorboard_run_name"
+        ):
+            return True
+    return False
+
+
+def inject_run_id(
+    config: ExperimentConfig,
+    *,
+    preserve_tensorboard_run_name: bool = False,
+) -> tuple[ExperimentConfig, str]:
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    safe_env_name = str(config.env.env_name).replace(":", "_").replace("-", "_")
+    run_id = f"{config.system.name}_{safe_env_name}_{timestamp}"
+
+    config.checkpointing.checkpoint_dir = str(
+        Path(config.checkpointing.checkpoint_dir)
+        / str(config.system.name)
+        / safe_env_name
+        / timestamp
+    )
+
+    if config.logging.tensorboard_logdir and not preserve_tensorboard_run_name:
+        config.logging.tensorboard_run_name = run_id
+
+    return config, run_id
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_DIR, config_name="ppo/train_binpack")
@@ -49,6 +85,14 @@ def main(cfg: DictConfig) -> None:
         raise TypeError(
             f"Hydra config did not resolve to ExperimentConfig. Got: {type(typed)}"
         )
+
+    hydra_overrides = HydraConfig.get().overrides.task
+    preserve_tb_run_name = _has_explicit_tensorboard_run_name_override(hydra_overrides)
+    config, run_id = inject_run_id(
+        config,
+        preserve_tensorboard_run_name=preserve_tb_run_name,
+    )
+    print(f"Starting run: {run_id}")
 
     system_name = str(config.system.name).lower()
     if system_name == "ppo":
