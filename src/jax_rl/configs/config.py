@@ -55,6 +55,20 @@ class SystemConfig:
     learner_updates_per_cycle: int = 1
     tree_memory_budget_mb: int = 512
 
+    mpo_epsilon: float = 0.1
+    mpo_epsilon_policy: float = 0.05
+    dual_lr: float = 1e-4
+    dual_init_log_temperature: float = -2.0
+    dual_init_log_alpha: float = -2.0
+    target_tau: float = 0.005
+    num_particles: int = 8
+    search_depth: int = 4
+    search_gamma: float = 0.99
+    search_gae_lambda: float = 0.95
+    spo_resampling_mode: str = "ess"
+    spo_resampling_period: int = 1
+    spo_ess_threshold: float = 0.5
+
 
 @dataclass
 class CheckpointConfig:

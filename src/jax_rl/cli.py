@@ -122,9 +122,11 @@ def main(cfg: DictConfig) -> None:
         from .systems.ppo.anakin.system import train as train_fn
     elif system_name == "alphazero":
         from .systems.alphazero.system import train as train_fn
+    elif system_name == "spo":
+        from .systems.spo.system import train as train_fn
     else:
         raise ValueError(
-            f"Unsupported system.name '{config.system.name}'. Expected 'ppo' or 'alphazero'."
+            f"Unsupported system.name '{config.system.name}'. Expected 'ppo', 'alphazero' or 'spo'."
         )
 
     output = train_fn(config)

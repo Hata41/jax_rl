@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import time
+
+import jax.numpy as jnp
+
+from ....configs.config import ExperimentConfig
+from ....utils.exceptions import NumericalInstabilityError
+from ....utils.jax_utils import unreplicate_tree
+from ....utils.logging import extract_learning_rate, jaxRL_Logger
+from ....utils.runtime import PhaseTimer
+from ....utils.types import LogEvent
+from .factory import build_system
+from .steps import SPORunnerState, make_spo_steps
+
+
+def _run_warmup_rollouts(config: ExperimentConfig, pmap_rollout, runner_state):
+    warmup_steps = max(int(getattr(config.system, "warmup_steps", 0)), 0)
+    if warmup_steps == 0:
+        return runner_state
+
+    rollout_len = max(int(config.arch.num_steps), 1)
+    warmup_rollouts = (warmup_steps + rollout_len - 1) // rollout_len
+
+    for _ in range(warmup_rollouts):
+        runner_state, (_, rollout_metrics) = pmap_rollout(runner_state)
+        rollout_metrics = dict(unreplicate_tree(rollout_metrics))
+        if not bool(jnp.all(rollout_metrics.get("search_finite", jnp.asarray(True, dtype=jnp.bool_)))):
+            raise NumericalInstabilityError("SPO warmup search produced non-finite values.")
+
+    return runner_state
+
+
+def train(config: ExperimentConfig):
+    system = build_system(config, SPORunnerState)
+
+    pmap_rollout, pmap_update = make_spo_steps(
+        config=config,
+        env=system.env,
+        env_params=system.env_params,
+        actor_optimizer=system.actor_optimizer,
+        critic_optimizer=system.critic_optimizer,
+        dual_optimizer=system.dual_optimizer,
+        is_rustpool=system.is_rustpool,
+        num_envs_per_device=system.num_envs_per_device,
+        buffer_add_fn=system.buffer_add_fn,
+        buffer_sample_fn=system.buffer_sample_fn,
+    )
+
+    runner_state = _run_warmup_rollouts(config, pmap_rollout, system.runner_state)
+    latest_metrics: dict[str, float] = {}
+    latest_checkpoint = None
+
+    logger = jaxRL_Logger.from_config(config)
+    logger.log_config(config)
+    tensorboard_run_dir = (
+        str(config.logging.tensorboard_logdir + "/" + config.logging.tensorboard_run_name)
+        if config.logging.tensorboard_logdir
+        else None
+    )
+
+    try:
+        for update_idx in range(config.num_updates):
+            timer = PhaseTimer(now_fn=time.time)
+            with timer.phase("act"):
+                runner_state, rollout_outputs = pmap_rollout(runner_state)
+            _, rollout_metrics = rollout_outputs
+            rollout_metrics = dict(unreplicate_tree(rollout_metrics))
+            if not bool(jnp.all(rollout_metrics.get("search_finite", jnp.asarray(True, dtype=jnp.bool_)))):
+                raise NumericalInstabilityError("SPO search produced non-finite values.")
+
+            with timer.phase("train"):
+                runner_state, train_metrics = pmap_update(runner_state, rollout_outputs)
+
+            train_metrics = dict(unreplicate_tree(train_metrics))
+            loss_is_finite = train_metrics.get("loss_is_finite", jnp.asarray(True, dtype=jnp.bool_))
+            search_finite = train_metrics.get("search_finite", jnp.asarray(True, dtype=jnp.bool_))
+            if not bool(jnp.all(loss_is_finite)):
+                raise NumericalInstabilityError("SPO update produced non-finite MPO loss outputs.")
+            if not bool(jnp.all(search_finite)):
+                raise NumericalInstabilityError("SPO search produced non-finite values.")
+
+            train_metrics["steps_per_second"] = timer.steps_per_second(
+                "train",
+                max(config.system.learner_updates_per_cycle, 1),
+            )
+            actor_opt_state = unreplicate_tree(runner_state.train_state.opt_states.actor_opt_state)
+            train_metrics["learning_rate"] = extract_learning_rate(actor_opt_state)
+
+            log_step = (update_idx + 1) * config.rollout_batch_size
+            logger.log(train_metrics, log_step, LogEvent.TRAIN)
+
+            latest_metrics = {
+                key: float(value) if hasattr(value, "__float__") else value
+                for key, value in train_metrics.items()
+            }
+
+            if config.checkpointing.save_interval_steps > 0 and (
+                (update_idx + 1) % config.checkpointing.save_interval_steps == 0
+                or update_idx == config.num_updates - 1
+            ):
+                train_state_to_save = unreplicate_tree(runner_state.train_state)
+                key_to_save = unreplicate_tree(runner_state.key)
+                checkpoint_metric = float(-latest_metrics.get("loss_actor_dual", 0.0))
+                system.checkpointer.save(
+                    timestep=update_idx + 1,
+                    train_state=train_state_to_save,
+                    key=key_to_save,
+                    metric=checkpoint_metric,
+                )
+                latest_checkpoint = system.checkpointer.checkpoint_path_for_step(update_idx + 1)
+    finally:
+        logger.flush()
+        logger.close()
+
+    return {
+        "num_updates": config.num_updates,
+        "start_update": 0,
+        "ran_updates": config.num_updates,
+        "metrics": latest_metrics,
+        "checkpoint_path": latest_checkpoint,
+        "tensorboard_run_dir": tensorboard_run_dir,
+        "params": unreplicate_tree(runner_state.train_state.params.actor_online),
+    }
