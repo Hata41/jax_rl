@@ -40,17 +40,17 @@ def _setup_environment(config: ExperimentConfig):
         raise ValueError("total_timesteps is too small for one PPO update.")
 
     num_devices = config.local_device_count
-    if config.system.num_envs % num_devices != 0:
+    if config.arch.num_envs % num_devices != 0:
         raise ConfigDivisibilityError(
             "num_envs must be divisible by local device count, "
-            f"got num_envs={config.system.num_envs} and num_devices={num_devices}."
+            f"got num_envs={config.arch.num_envs} and num_devices={num_devices}."
         )
     if config.system.minibatch_size % num_devices != 0:
         raise ConfigDivisibilityError(
             "minibatch_size must be divisible by local device count, "
             f"got minibatch_size={config.system.minibatch_size} and num_devices={num_devices}."
         )
-    num_envs_per_device = config.system.num_envs // num_devices
+    num_envs_per_device = config.arch.num_envs // num_devices
 
     env, env_params = make_stoa_env(
         config.env.env_name,
@@ -113,6 +113,13 @@ def _init_train_state(
         start_update = int(payload["step"])
         if restored_key is not None:
             key = restored_key
+        if config.checkpointing.transfer_weights_only:
+            start_update = 0
+            train_state = TrainState(
+                params=train_state.params,
+                actor_opt_state=actor_optimizer.init(train_state.params.state),
+                critic_opt_state=critic_optimizer.init(train_state.params.state),
+            )
     else:
         train_state = initial_train_state
 

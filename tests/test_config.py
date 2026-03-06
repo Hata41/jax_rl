@@ -58,16 +58,16 @@ def test_hydra_compose_overrides_apply_to_typed_config():
             config_name="ppo/train_binpack",
             overrides=[
                 "ppo.system.actor_lr=0.005",
-                "ppo.system.num_envs=32",
-                "ppo.system.cuda_visible_devices='0,1'",
+                "ppo.arch.num_envs=32",
+                "ppo.arch.cuda_visible_devices='0,1'",
                 "ppo.env.env_kwargs.max_items=42",
             ],
         )
 
     obj = _to_typed_config(cfg)
     assert obj.system.actor_lr == pytest.approx(0.005)
-    assert obj.system.num_envs == 32
-    assert obj.system.cuda_visible_devices == "0,1"
+    assert obj.arch.num_envs == 32
+    assert obj.arch.cuda_visible_devices == "0,1"
     assert obj.env.env_kwargs["max_items"] == 42
 
 

@@ -10,18 +10,22 @@ env:
   env_kwargs:
     max_items: 20
 
-system:
-  # Choices: ppo | alphazero
-  name: ppo
+arch:
   total_timesteps: 2048000
-  # Choices: null (auto), cpu, gpu, tpu
   platform: null
-  # Choices: null or GPU id list string (examples: "0", "0,1")
   cuda_visible_devices: null
   num_envs: 64
   num_steps: 32
+
+system:
+  # Choices: ppo | alphazero
+  name: ppo
   actor_lr: 0.0003
   critic_lr: 0.0003
+  # Choices: adam | adamw | sgd | rmsprop | schedule_free_adamw | schedule_free_sgd
+  optimizer: adam
+  # Choices: linear | constant | cosine
+  lr_schedule: linear
   gamma: 0.99
   gae_lambda: 0.95
   clip_epsilon: 0.2
@@ -39,8 +43,14 @@ network:
   num_layers: 1
 
 checkpointing:
-  # Runtime appends: <checkpoint_dir>/<system.name>/<safe_env_name>/<timestamp>
+  # Runtime appends: <checkpoint_dir>/<system.name>/<safe_env_name>/<run_token>
+  # run_token = timestamp by default, or sanitized CLI logging.tensorboard_run_name if explicitly set.
   checkpoint_dir: checkpoints
+  # Optional extra subfolder for naming checkpoints (examples: best_model, ablation_A, resume_exp_3)
+  checkpoint_name: null
+  # If true with resume_from set, load only params from checkpoint and reinitialize optimizer states.
+  # Example transfer-learning run: resume_from: checkpoints/old_run/10 + transfer_weights_only: true
+  transfer_weights_only: false
   save_interval_steps: 0
   max_to_keep: 1
   keep_period: null
@@ -51,7 +61,7 @@ logging:
   log_every: 1
   # Choices: null to disable TensorBoard, or a base directory (example: runs_tb)
   tensorboard_logdir: runs_tb
-  # Runtime sets this to unique run_id unless explicitly overridden from CLI.
+  # Runtime sets this to run_id unless explicitly overridden from CLI.
   tensorboard_run_name: ppo_binpack
 
 evaluations:

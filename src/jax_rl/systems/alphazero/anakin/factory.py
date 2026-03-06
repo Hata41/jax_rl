@@ -50,7 +50,7 @@ def _infer_action_dims(action_space) -> int | tuple[int, ...]:
 
 def _estimate_tree_memory_bytes(config: ExperimentConfig) -> int:
     nodes_per_env = int(config.system.num_simulations) * int(config.system.max_depth)
-    return int(config.system.num_envs) * max(nodes_per_env, 1) * 16
+    return int(config.arch.num_envs) * max(nodes_per_env, 1) * 16
 
 
 def _take_first_env_sample(obs):
@@ -88,10 +88,10 @@ def build_system(config: ExperimentConfig, runner_state_cls: type):
         )
 
     num_devices = max(config.local_device_count, 1)
-    if config.system.num_envs % num_devices != 0:
+    if config.arch.num_envs % num_devices != 0:
         raise ConfigDivisibilityError(
             "num_envs must be divisible by local device count, "
-            f"got num_envs={config.system.num_envs} and num_devices={num_devices}."
+            f"got num_envs={config.arch.num_envs} and num_devices={num_devices}."
         )
     if config.system.total_buffer_size % num_devices != 0:
         raise ConfigDivisibilityError(
@@ -102,7 +102,7 @@ def build_system(config: ExperimentConfig, runner_state_cls: type):
             "total_batch_size must be divisible by local device count for pmap compatibility."
         )
 
-    num_envs_per_device = config.system.num_envs // num_devices
+    num_envs_per_device = config.arch.num_envs // num_devices
     env, env_params = make_stoa_env(
         config.env.env_name,
         num_envs_per_device=num_envs_per_device,
@@ -153,6 +153,12 @@ def build_system(config: ExperimentConfig, runner_state_cls: type):
         )
         if restored_key is not None:
             key = restored_key
+        if config.checkpointing.transfer_weights_only:
+            train_state = TrainState(
+                params=train_state.params,
+                actor_opt_state=actor_optimizer.init(train_state.params.state),
+                critic_opt_state=critic_optimizer.init(train_state.params.state),
+            )
 
     fbx = importlib.import_module("flashbax")
     key, buffer_reset_key = jax.random.split(key)

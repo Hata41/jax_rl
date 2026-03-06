@@ -19,7 +19,7 @@ def _run_warmup_rollouts(config: ExperimentConfig, pmap_rollout, runner_state):
     if warmup_steps == 0:
         return runner_state
 
-    rollout_len = max(int(config.system.num_steps), 1)
+    rollout_len = max(int(config.arch.num_steps), 1)
     warmup_rollouts = (warmup_steps + rollout_len - 1) // rollout_len
 
     for _ in range(warmup_rollouts):

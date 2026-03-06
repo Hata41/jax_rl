@@ -25,7 +25,7 @@ def _rollout_output(finite: bool):
 def test_run_warmup_rollouts_uses_ceiling_cycles():
     config = ExperimentConfig()
     config.system.warmup_steps = 9
-    config.system.num_steps = 4
+    config.arch.num_steps = 4
 
     calls = {"count": 0}
 
@@ -42,7 +42,7 @@ def test_run_warmup_rollouts_uses_ceiling_cycles():
 def test_run_warmup_rollouts_raises_on_non_finite_search():
     config = ExperimentConfig()
     config.system.warmup_steps = 4
-    config.system.num_steps = 4
+    config.arch.num_steps = 4
 
     def _pmap_rollout(runner_state):
         return runner_state, _rollout_output(False)

@@ -1,14 +1,17 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
+import pytest
 
-from jax_rl.configs.config import ExperimentConfig, SystemConfig
+from jax_rl.configs.config import ArchConfig, ExperimentConfig, SystemConfig
 from jax_rl.networks import init_policy_value_params
 from jax_rl.systems.ppo.update import (
     _zero_out_except_module,
     make_actor_optimizer,
     make_critic_optimizer,
 )
+from jax_rl.utils.logging import extract_learning_rate
 
 
 def _allclose_tree(tree_a, tree_b):
@@ -57,10 +60,12 @@ def test_actor_and_critic_optimizers_are_separate():
 
 def test_actor_learning_rate_schedule_reaches_zero_at_total_opt_steps():
     config = ExperimentConfig(
-        system=SystemConfig(
+        arch=ArchConfig(
             total_timesteps=8_192,
             num_envs=8,
             num_steps=16,
+        ),
+        system=SystemConfig(
             update_epochs=4,
             minibatch_size=32,
             actor_lr=3e-4,
@@ -85,7 +90,7 @@ def test_actor_learning_rate_schedule_reaches_zero_at_total_opt_steps():
     for _ in range(expected_total_steps):
         _, opt_state = optimizer.update(grads, opt_state, params)
 
-    current_lr = opt_state[1].hyperparams["learning_rate"]
+    current_lr = extract_learning_rate(opt_state)
     assert float(current_lr) == 0.0
 
 
@@ -105,3 +110,89 @@ def test_gradient_routing_shared_torso():
     assert jnp.all(critic_grads["critic_head"]["kernel"] == grads["critic_head"]["kernel"])
     assert jnp.all(critic_grads["actor_head"]["kernel"] == 0.0)
     assert jnp.all(critic_grads["shared_torso"]["kernel"] == 0.0)
+
+
+@pytest.mark.parametrize("opt_name", ["adam", "adamw", "sgd"])
+@pytest.mark.parametrize("sched_name", ["linear", "constant", "cosine"])
+def test_supported_standard_optimizers_and_schedules(opt_name: str, sched_name: str):
+    config = ExperimentConfig(
+        arch=ArchConfig(
+            total_timesteps=8_192,
+            num_envs=8,
+            num_steps=16,
+        ),
+        system=SystemConfig(
+            optimizer=opt_name,
+            lr_schedule=sched_name,
+            actor_lr=3e-4,
+            update_epochs=2,
+            minibatch_size=64,
+        )
+    )
+    params = init_policy_value_params(
+        jax.random.PRNGKey(9),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
+        obs_dim=4,
+        action_dims=2,
+    ).state
+
+    optimizer = make_actor_optimizer(config)
+    opt_state = optimizer.init(params)
+    grads = jax.tree_util.tree_map(jnp.zeros_like, params)
+    updates, next_opt_state = optimizer.update(grads, opt_state, params)
+
+    assert updates is not None
+    assert next_opt_state is not None
+
+
+@pytest.mark.parametrize("opt_name", ["schedule_free_adamw", "schedule_free_sgd"])
+def test_schedule_free_optimizers(opt_name: str):
+    config = ExperimentConfig(
+        arch=ArchConfig(
+            total_timesteps=8_192,
+            num_envs=8,
+            num_steps=16,
+        ),
+        system=SystemConfig(
+            optimizer=opt_name,
+            lr_schedule="linear",
+            actor_lr=1e-3,
+            update_epochs=2,
+            minibatch_size=64,
+        )
+    )
+    params = init_policy_value_params(
+        jax.random.PRNGKey(11),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
+        obs_dim=4,
+        action_dims=2,
+    ).state
+    grads = jax.tree_util.tree_map(jnp.ones_like, params)
+
+    optimizer = make_actor_optimizer(config)
+    opt_state = optimizer.init(params)
+    updates, next_opt_state = optimizer.update(grads, opt_state, params)
+
+    assert updates is not None
+    assert next_opt_state is not None
+    lr_value = extract_learning_rate(next_opt_state)
+    assert not np.isnan(lr_value)
+
+
+def test_invalid_optimizer_or_schedule_raises_error():
+    params = init_policy_value_params(
+        jax.random.PRNGKey(13),
+        network_config={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [16, 16]},
+        obs_dim=4,
+        action_dims=2,
+    ).state
+
+    bad_opt_config = ExperimentConfig(system=SystemConfig(optimizer="magic_opt", lr_schedule="linear"))
+    with pytest.raises(ValueError, match="Unsupported optimizer"):
+        make_actor_optimizer(bad_opt_config).init(params)
+
+    bad_sched_config = ExperimentConfig(
+        system=SystemConfig(optimizer="adam", lr_schedule="magic_sched")
+    )
+    with pytest.raises(ValueError, match="Unsupported lr_schedule"):
+        make_actor_optimizer(bad_sched_config).init(params)

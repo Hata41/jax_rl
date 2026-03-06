@@ -32,9 +32,7 @@ env:
   env_kwargs: {}
 
 system:
-  total_timesteps: 2048
-  num_envs: 8
-  num_steps: 32
+  name: ppo
   actor_lr: 0.0003
   critic_lr: 0.0003
   gamma: 0.99
@@ -45,6 +43,13 @@ system:
   update_epochs: 1
   minibatch_size: 64
   max_grad_norm: 0.5
+
+arch:
+  total_timesteps: 2048
+  platform: null
+  cuda_visible_devices: null
+  num_envs: 8
+  num_steps: 32
 
 checkpointing:
   checkpoint_dir: checkpoints
@@ -67,14 +72,14 @@ evaluations: {}
 
 Computed properties:
 
-- `rollout_batch_size = system.num_envs * system.num_steps`
-- `num_updates = system.total_timesteps // rollout_batch_size`
+- `rollout_batch_size = arch.num_envs * arch.num_steps`
+- `num_updates = arch.total_timesteps // rollout_batch_size`
 
 ## Common CLI Overrides
 
 ```bash
 # training hyperparameters
-uv run jax-rl-train system.actor_lr=0.001 system.num_envs=32
+uv run jax-rl-train system.actor_lr=0.001 arch.num_envs=32
 
 # model config
 uv run jax-rl-train network.hidden_dim=128
@@ -86,8 +91,8 @@ uv run jax-rl-train env.env_name=CartPole-v1
 uv run jax-rl-train +env.env_kwargs.max_items=50
 
 # hardware selection
-uv run jax-rl-train system.platform=cpu
-uv run jax-rl-train system.platform=cuda system.cuda_visible_devices='0,1'
+uv run jax-rl-train arch.platform=cpu
+uv run jax-rl-train arch.platform=cuda arch.cuda_visible_devices='0,1'
 ```
 
 ## Config Choices Quick Reference
@@ -98,18 +103,24 @@ uv run jax-rl-train system.platform=cuda system.cuda_visible_devices='0,1'
   - `rlpallet:<task_id>` (example: `rlpallet:UldEnv-v2`)
   - `jaxpallet:<preset>` (example: `jaxpallet:PMC-PLD`)
   - Gymnax fallback id (example: `CartPole-v1`)
-- `system.platform`: `null` (auto) | `cpu` | `gpu` | `tpu`
-- `system.cuda_visible_devices`: `null` or a GPU id list string (example: `'0'`, `'0,1'`)
+- `arch.platform`: `null` (auto) | `cpu` | `gpu` | `tpu`
+- `arch.cuda_visible_devices`: `null` or a GPU id list string (example: `'0'`, `'0,1'`)
 - AlphaZero only:
   - `system.search_method`: `muzero` | `gumbel`
   - `evaluations.<name>.action_selection`: `policy` | `search`
 
 Runtime behavior for outputs:
 
-- Run id is auto-generated as `{system.name}_{safe_env_name}_{timestamp}`.
-- `checkpointing.checkpoint_dir` is auto-expanded to `<base>/<system.name>/<safe_env_name>/<timestamp>`.
+- Run id is auto-generated as `{system.name}_{safe_env_name}_{run_token}`.
+- `run_token` is timestamp by default, or sanitized CLI `logging.tensorboard_run_name` if explicitly set.
+- `checkpointing.checkpoint_dir` is auto-expanded to `<base>/<system.name>/<safe_env_name>/<run_token>`.
+- Optional `checkpointing.checkpoint_name` adds a final subfolder (example: `best_model`).
 - `logging.tensorboard_run_name` is auto-set to run id unless explicitly overridden from CLI.
 - `checkpointing.resume_from` stays exactly as provided (never rewritten by run-id injection).
+
+Example CLI override:
+
+- `uv run jax-rl-train checkpointing.checkpoint_name=best_model`
 
 ## Evaluation Profiles
 
@@ -167,12 +178,12 @@ checkpointing:
   resume_from: checkpoints
 ```
 
-Training continues up to `system.total_timesteps`.
+Training continues up to `arch.total_timesteps`.
 
 ## Troubleshooting
 
 - `ValueError: num_envs must be divisible by local device count`
-  - Set `system.num_envs` to a multiple of `jax.local_device_count()`.
+  - Set `arch.num_envs` to a multiple of `jax.local_device_count()`.
 - `ValueError: minibatch_size must divide num_envs * num_steps`
   - Adjust `system.minibatch_size` to divide rollout batch size.
 - `TypeError: unexpected keyword argument ...` during env creation
@@ -200,7 +211,7 @@ CLI entrypoint: `src/jax_rl/cli.py`
 Flow:
 
 1. Compose Hydra config from `config/train.yaml`.
-2. Apply runtime env vars early from raw config if provided (`system.platform`, `system.cuda_visible_devices`).
+2. Apply runtime env vars early from raw config if provided (`arch.platform`, `arch.cuda_visible_devices`).
 3. Convert composed config to typed `ExperimentConfig`.
 4. Run `train(config)` and optional evaluation profiles.
 
@@ -209,7 +220,8 @@ Flow:
 Root config is `ExperimentConfig` with namespaces:
 
 - `env`: `env_name`, `seed`, `env_kwargs`
-- `system`: PPO hyperparameters + optional runtime selection
+- `arch`: shared architecture/hardware settings (`total_timesteps`, `platform`, `cuda_visible_devices`, `num_envs`, `num_steps`)
+- `system`: algorithm hyperparameters
 - `checkpointing`: checkpoint settings
 - `logging`: logger and tensorboard settings
 - root maps: `network`, `evaluations`

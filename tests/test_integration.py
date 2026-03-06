@@ -7,6 +7,7 @@ from stoa.core_wrappers.vmap import VmapWrapper
 from stoa.env_types import StepType, TimeStep
 
 from jax_rl.configs.config import (
+    ArchConfig,
     CheckpointConfig,
     EnvConfig,
     ExperimentConfig,
@@ -151,10 +152,12 @@ def test_train_pipeline_dry_run():
 
     config = ExperimentConfig(
         env=EnvConfig(env_name="jaxpallet:PMC-PLD"),
-        system=SystemConfig(
+        arch=ArchConfig(
             total_timesteps=4,
             num_envs=2,
             num_steps=2,
+        ),
+        system=SystemConfig(
             update_epochs=1,
             minibatch_size=2,
         ),
@@ -204,10 +207,12 @@ def test_train_pipeline_evaluators_closed(monkeypatch):
     num_envs = jax.local_device_count()
     config = ExperimentConfig(
         env=EnvConfig(env_name="CartPole-v1"),
-        system=SystemConfig(
+        arch=ArchConfig(
             total_timesteps=num_envs * 8,
             num_envs=num_envs,
             num_steps=8,
+        ),
+        system=SystemConfig(
             update_epochs=1,
             minibatch_size=num_envs * 8,
         ),

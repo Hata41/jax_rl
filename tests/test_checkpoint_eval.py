@@ -6,9 +6,10 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jax_rl.configs.config import CheckpointConfig, EnvConfig, ExperimentConfig, LoggingConfig, SystemConfig
+from jax_rl.configs.config import ArchConfig, CheckpointConfig, EnvConfig, ExperimentConfig, LoggingConfig, SystemConfig
 from jax_rl.systems.ppo.eval import Evaluator, evaluate
 from jax_rl.systems.ppo.anakin.system import train
+from jax_rl.systems.ppo.anakin.factory import _init_train_state, _setup_environment
 from jax_rl.systems.ppo.update import make_actor_optimizer, make_critic_optimizer
 from jax_rl.utils.checkpoint import Checkpointer
 from jax_rl.utils.exceptions import CheckpointRestoreError, ConfigDivisibilityError
@@ -175,10 +176,12 @@ def test_train_resume_from_checkpoint(tmp_path: Path):
 
     config = ExperimentConfig(
         env=EnvConfig(env_name="CartPole-v1", seed=0),
-        system=SystemConfig(
+        arch=ArchConfig(
             total_timesteps=2 * rollout_batch_size,
             num_envs=num_devices,
             num_steps=8,
+        ),
+        system=SystemConfig(
             update_epochs=1,
             minibatch_size=rollout_batch_size,
         ),
@@ -198,16 +201,189 @@ def test_train_resume_from_checkpoint(tmp_path: Path):
     assert Path(checkpoint_path).exists()
 
     resumed_checkpointing = replace(config.checkpointing, resume_from=str(checkpoint_path))
-    resumed_system = replace(config.system, total_timesteps=3 * rollout_batch_size)
+    resumed_arch = replace(config.arch, total_timesteps=3 * rollout_batch_size)
     resumed_config = replace(
         config,
         checkpointing=resumed_checkpointing,
-        system=resumed_system,
+        arch=resumed_arch,
     )
 
     resumed_result = train(resumed_config)
 
     assert resumed_result["start_update"] == 2
+
+
+def test_transfer_weights_only_resets_optimizers(tmp_path: Path):
+    num_devices = jax.local_device_count()
+    rollout_batch_size = num_devices * 8
+    checkpoint_root = tmp_path / "transfer_ckpts"
+
+    base_config = ExperimentConfig(
+        env=EnvConfig(env_name="CartPole-v1", seed=0),
+        arch=ArchConfig(
+            total_timesteps=2 * rollout_batch_size,
+            num_envs=num_devices,
+            num_steps=8,
+        ),
+        system=SystemConfig(
+            update_epochs=1,
+            minibatch_size=rollout_batch_size,
+        ),
+        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
+        checkpointing=CheckpointConfig(
+            checkpoint_dir=str(checkpoint_root),
+            save_interval_steps=1,
+            max_to_keep=3,
+        ),
+        evaluations={},
+    )
+
+    actor_optimizer = make_actor_optimizer(base_config)
+    critic_optimizer = make_critic_optimizer(base_config)
+
+    params = init_policy_value_params(
+        jax.random.PRNGKey(5),
+        network_config=base_config.network,
+        obs_dim=4,
+        action_dims=2,
+    )
+    actor_opt_state = actor_optimizer.init(params.state)
+    critic_opt_state = critic_optimizer.init(params.state)
+
+    zero_grads = jax.tree_util.tree_map(jnp.zeros_like, params.state)
+    _, advanced_actor_opt_state = actor_optimizer.update(
+        zero_grads,
+        actor_opt_state,
+        params=params.state,
+    )
+    _, advanced_critic_opt_state = critic_optimizer.update(
+        zero_grads,
+        critic_opt_state,
+        params=params.state,
+    )
+
+    mutated_state = TrainState(
+        params=params,
+        actor_opt_state=advanced_actor_opt_state,
+        critic_opt_state=advanced_critic_opt_state,
+    )
+    checkpoint_key = jax.random.PRNGKey(42)
+    checkpointer = Checkpointer(
+        checkpoint_dir=str(checkpoint_root),
+        max_to_keep=3,
+        keep_period=None,
+        save_interval_steps=1,
+        metadata={"config": {"transfer_weights_only": True}},
+    )
+    assert checkpointer.save(
+        timestep=5,
+        train_state=mutated_state,
+        key=checkpoint_key,
+        metric=0.0,
+    )
+    resume_path = checkpointer.checkpoint_path_for_step(5)
+
+    transfer_config = replace(
+        base_config,
+        checkpointing=replace(
+            base_config.checkpointing,
+            resume_from=resume_path,
+            transfer_weights_only=True,
+        ),
+    )
+
+    _, _, obs_space, obs_dim, action_dims, n_devices, _ = _setup_environment(transfer_config)
+    restored_train_state_repl, restored_actor_opt, restored_critic_opt, _, start_update, _ = _init_train_state(
+        config=transfer_config,
+        obs_space=obs_space,
+        obs_dim=obs_dim,
+        action_dims=action_dims,
+        num_devices=n_devices,
+    )
+    restored_train_state = jax.tree_util.tree_map(lambda x: x[0], restored_train_state_repl)
+
+    expected_fresh_actor_state = restored_actor_opt.init(restored_train_state.params.state)
+    expected_fresh_critic_state = restored_critic_opt.init(restored_train_state.params.state)
+
+    assert start_update == 0
+    assert jax.tree_util.tree_all(
+        jax.tree_util.tree_map(jnp.allclose, restored_train_state.params, mutated_state.params)
+    )
+    assert jax.tree_util.tree_all(
+        jax.tree_util.tree_map(
+            jnp.allclose,
+            restored_train_state.actor_opt_state,
+            expected_fresh_actor_state,
+        )
+    )
+    assert jax.tree_util.tree_all(
+        jax.tree_util.tree_map(
+            jnp.allclose,
+            restored_train_state.critic_opt_state,
+            expected_fresh_critic_state,
+        )
+    )
+    assert not jax.tree_util.tree_all(
+        jax.tree_util.tree_map(
+            jnp.allclose,
+            restored_train_state.actor_opt_state,
+            advanced_actor_opt_state,
+        )
+    )
+    assert not jax.tree_util.tree_all(
+        jax.tree_util.tree_map(
+            jnp.allclose,
+            restored_train_state.critic_opt_state,
+            advanced_critic_opt_state,
+        )
+    )
+
+
+@pytest.mark.integration
+def test_train_resume_with_transfer_weights_only(tmp_path: Path):
+    num_devices = jax.local_device_count()
+    rollout_batch_size = num_devices * 8
+    checkpoint_root = tmp_path / "resume_transfer_ckpts"
+
+    config = ExperimentConfig(
+        env=EnvConfig(env_name="CartPole-v1", seed=0),
+        arch=ArchConfig(
+            total_timesteps=2 * rollout_batch_size,
+            num_envs=num_devices,
+            num_steps=8,
+        ),
+        system=SystemConfig(
+            update_epochs=1,
+            minibatch_size=rollout_batch_size,
+        ),
+        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
+        checkpointing=CheckpointConfig(
+            checkpoint_dir=str(checkpoint_root),
+            save_interval_steps=1,
+            max_to_keep=3,
+        ),
+        evaluations={},
+    )
+
+    first_result = train(config)
+    checkpoint_path = first_result["checkpoint_path"]
+    assert checkpoint_path is not None
+
+    resumed_checkpointing = replace(
+        config.checkpointing,
+        resume_from=str(checkpoint_path),
+        transfer_weights_only=True,
+    )
+    resumed_arch = replace(config.arch, total_timesteps=2 * rollout_batch_size)
+    resumed_config = replace(
+        config,
+        checkpointing=resumed_checkpointing,
+        arch=resumed_arch,
+    )
+
+    resumed_result = train(resumed_config)
+
+    assert resumed_result["start_update"] == 0
 
 
 @pytest.mark.integration

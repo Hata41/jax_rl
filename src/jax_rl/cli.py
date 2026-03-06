@@ -28,21 +28,40 @@ def _has_explicit_tensorboard_run_name_override(overrides: list[str] | None) -> 
     return False
 
 
+def _sanitize_run_token(value: str) -> str:
+    return (
+        str(value)
+        .replace(":", "_")
+        .replace("-", "_")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace(" ", "_")
+    )
+
+
 def inject_run_id(
     config: ExperimentConfig,
     *,
     preserve_tensorboard_run_name: bool = False,
+    run_name_override: str | None = None,
 ) -> tuple[ExperimentConfig, str]:
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    safe_env_name = str(config.env.env_name).replace(":", "_").replace("-", "_")
-    run_id = f"{config.system.name}_{safe_env_name}_{timestamp}"
+    run_token_source = run_name_override if run_name_override else timestamp
+    run_token = _sanitize_run_token(run_token_source)
+    safe_env_name = _sanitize_run_token(config.env.env_name)
+    run_id = f"{config.system.name}_{safe_env_name}_{run_token}"
 
-    config.checkpointing.checkpoint_dir = str(
+    checkpoint_path = (
         Path(config.checkpointing.checkpoint_dir)
         / str(config.system.name)
         / safe_env_name
-        / timestamp
+        / run_token
     )
+    checkpoint_name = getattr(config.checkpointing, "checkpoint_name", None)
+    if checkpoint_name:
+        checkpoint_path = checkpoint_path / _sanitize_run_token(checkpoint_name)
+
+    config.checkpointing.checkpoint_dir = str(checkpoint_path)
 
     if config.logging.tensorboard_logdir and not preserve_tensorboard_run_name:
         config.logging.tensorboard_run_name = run_id
@@ -52,10 +71,10 @@ def inject_run_id(
 
 @hydra.main(version_base=None, config_path=_CONFIG_DIR, config_name="ppo/train_binpack")
 def main(cfg: DictConfig) -> None:
-    system_cfg = cfg.get("system") or {}
-    platform = system_cfg.get("platform") if hasattr(system_cfg, "get") else None
+    arch_cfg = cfg.get("arch") or {}
+    platform = arch_cfg.get("platform") if hasattr(arch_cfg, "get") else None
     cuda_visible_devices = (
-        system_cfg.get("cuda_visible_devices") if hasattr(system_cfg, "get") else None
+        arch_cfg.get("cuda_visible_devices") if hasattr(arch_cfg, "get") else None
     )
     configure_jax_runtime_defaults(
         platform=platform,
@@ -88,9 +107,13 @@ def main(cfg: DictConfig) -> None:
 
     hydra_overrides = HydraConfig.get().overrides.task
     preserve_tb_run_name = _has_explicit_tensorboard_run_name_override(hydra_overrides)
+    run_name_override = (
+        str(config.logging.tensorboard_run_name) if preserve_tb_run_name else None
+    )
     config, run_id = inject_run_id(
         config,
         preserve_tensorboard_run_name=preserve_tb_run_name,
+        run_name_override=run_name_override,
     )
     print(f"Starting run: {run_id}")
 

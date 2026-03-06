@@ -82,7 +82,7 @@ def train(config: ExperimentConfig):
             act_metrics = dict(rollout_metrics)
             act_metrics["steps_per_second"] = timer.steps_per_second(
                 "act",
-                num_devices * num_envs_per_device * config.system.num_steps,
+                num_devices * num_envs_per_device * config.arch.num_steps,
             )
             act_metrics.update(extract_completed_episode_metrics(rollout_infos))
 

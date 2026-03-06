@@ -56,15 +56,48 @@ def _zero_out_except_module(tree, module_prefixes: tuple[str, ...]):
 def _base_optimizer(learning_rate: float, config):
     total_opt_steps = _total_opt_steps(config)
     transition_steps = max(total_opt_steps - 1, 1)
-    lr_schedule = optax.linear_schedule(
-        init_value=learning_rate,
-        end_value=0.0,
-        transition_steps=transition_steps,
-    )
-    adam = optax.inject_hyperparams(optax.adam)(learning_rate=lr_schedule)
+
+    schedule_name = str(config.system.lr_schedule).lower()
+    if schedule_name == "linear":
+        schedule = optax.linear_schedule(
+            init_value=learning_rate,
+            end_value=0.0,
+            transition_steps=transition_steps,
+        )
+    elif schedule_name == "cosine":
+        schedule = optax.cosine_decay_schedule(
+            init_value=learning_rate,
+            decay_steps=transition_steps,
+        )
+    elif schedule_name == "constant":
+        schedule = learning_rate
+    else:
+        raise ValueError(
+            "Unsupported lr_schedule "
+            f"'{config.system.lr_schedule}'. Expected one of: linear, constant, cosine."
+        )
+
+    optimizer_name = str(config.system.optimizer).lower()
+    if optimizer_name in {"adam", "adamw", "sgd", "rmsprop"}:
+        optimizer_ctor = getattr(optax, optimizer_name)
+        base_opt = optax.inject_hyperparams(optimizer_ctor)(learning_rate=schedule)
+    elif optimizer_name in {"schedule_free_adamw", "schedule_free_sgd"}:
+        schedule_free_ctor = getattr(optax.contrib, optimizer_name, None)
+        if schedule_free_ctor is None:
+            raise ValueError(
+                f"Optimizer '{optimizer_name}' is not available in optax.contrib for this environment."
+            )
+        base_opt = optax.inject_hyperparams(schedule_free_ctor)(learning_rate=learning_rate)
+    else:
+        raise ValueError(
+            "Unsupported optimizer "
+            f"'{config.system.optimizer}'. Expected one of: "
+            "adam, adamw, sgd, rmsprop, schedule_free_adamw, schedule_free_sgd."
+        )
+
     return optax.chain(
         optax.clip_by_global_norm(config.system.max_grad_norm),
-        adam,
+        base_opt,
     )
 
 

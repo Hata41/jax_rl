@@ -202,7 +202,7 @@ def make_alphazero_steps(
             _scan_env,
             (state.train_state, state.buffer_state, state.env_state, state.obs, state.key),
             xs=None,
-            length=config.system.num_steps,
+            length=config.arch.num_steps,
         )
         traj = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 0, 1), transitions)
         next_state = AlphaZeroRunnerState(

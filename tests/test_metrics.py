@@ -4,7 +4,7 @@ import importlib
 from dataclasses import replace
 from types import SimpleNamespace
 
-from jax_rl.configs.config import EnvConfig, ExperimentConfig, LoggingConfig, SystemConfig
+from jax_rl.configs.config import ArchConfig, EnvConfig, ExperimentConfig, LoggingConfig, SystemConfig
 from jax_rl.systems.ppo.eval import EvaluationManager
 from jax_rl.systems.ppo.anakin.system import (
     train,
@@ -17,10 +17,12 @@ def _tiny_config(**overrides):
     num_envs = jax.local_device_count()
     config = ExperimentConfig(
         env=EnvConfig(env_name="CartPole-v1", seed=0),
-        system=SystemConfig(
+        arch=ArchConfig(
             total_timesteps=num_envs * 8,
             num_envs=num_envs,
             num_steps=8,
+        ),
+        system=SystemConfig(
             minibatch_size=num_envs * 8,
             update_epochs=2,
         ),
@@ -30,7 +32,7 @@ def _tiny_config(**overrides):
 
     updated_config = config
     for key, value in overrides.items():
-        if key in {"env", "system", "checkpointing", "logging"} and isinstance(value, dict):
+        if key in {"env", "arch", "system", "checkpointing", "logging"} and isinstance(value, dict):
             nested_config = getattr(updated_config, key)
             updated_config = replace(updated_config, **{key: replace(nested_config, **value)})
             continue
@@ -84,7 +86,7 @@ def test_sps_calculation_validity(monkeypatch):
         prefix = "" if event is LogEvent.ABSOLUTE else f"{event.value}/"
         flat.update({f"{prefix}{k}": float(np.asarray(v)) for k, v in metrics.items()})
 
-    expected_act_sps = config.system.num_envs * config.system.num_steps
+    expected_act_sps = config.arch.num_envs * config.arch.num_steps
     expected_train_sps = config.system.update_epochs * (
         config.rollout_batch_size // config.system.minibatch_size
     )

@@ -13,17 +13,22 @@ class EnvConfig:
 
 
 @dataclass
-class SystemConfig:
-    name: str = "ppo"
+class ArchConfig:
     total_timesteps: int = 100_000
     platform: str | None = None
     cuda_visible_devices: str | None = None
-
     num_envs: int = 16
     num_steps: int = 25
 
+
+@dataclass
+class SystemConfig:
+    name: str = "ppo"
+
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
+    optimizer: str = "adam"
+    lr_schedule: str = "linear"
     gamma: float = 0.99
     gae_lambda: float = 0.95
 
@@ -54,6 +59,8 @@ class SystemConfig:
 @dataclass
 class CheckpointConfig:
     checkpoint_dir: str = "checkpoints"
+    checkpoint_name: str | None = None
+    transfer_weights_only: bool = False
     save_interval_steps: int = 0
     max_to_keep: int = 1
     keep_period: Optional[int] = None
@@ -70,6 +77,7 @@ class LoggingConfig:
 @dataclass
 class ExperimentConfig:
     env: EnvConfig = field(default_factory=EnvConfig)
+    arch: ArchConfig = field(default_factory=ArchConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
     checkpointing: CheckpointConfig = field(default_factory=CheckpointConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -85,11 +93,11 @@ class ExperimentConfig:
 
     @property
     def rollout_batch_size(self) -> int:
-        return self.system.num_envs * self.system.num_steps
+        return self.arch.num_envs * self.arch.num_steps
 
     @property
     def num_updates(self) -> int:
-        return self.system.total_timesteps // self.rollout_batch_size
+        return self.arch.total_timesteps // self.rollout_batch_size
 
     @property
     def local_device_count(self) -> int:

@@ -25,14 +25,23 @@ def test_inject_run_id_preserves_tensorboard_name_when_requested(monkeypatch):
     config = ExperimentConfig()
     config.system.name = "ppo"
     config.env.env_name = "rlpallet:UldEnv-v2"
+    config.checkpointing.checkpoint_dir = "checkpoints"
     config.logging.tensorboard_logdir = "runs_tb"
-    config.logging.tensorboard_run_name = "my_custom_name"
+    config.logging.tensorboard_run_name = "my-custom:name"
 
     monkeypatch.setattr("jax_rl.cli.time.strftime", lambda _: "20260306_121314")
 
-    updated, _ = inject_run_id(config, preserve_tensorboard_run_name=True)
+    updated, run_id = inject_run_id(
+        config,
+        preserve_tensorboard_run_name=True,
+        run_name_override=config.logging.tensorboard_run_name,
+    )
 
-    assert updated.logging.tensorboard_run_name == "my_custom_name"
+    assert run_id == "ppo_rlpallet_UldEnv_v2_my_custom_name"
+    assert updated.checkpointing.checkpoint_dir.endswith(
+        "checkpoints/ppo/rlpallet_UldEnv_v2/my_custom_name"
+    )
+    assert updated.logging.tensorboard_run_name == "my-custom:name"
 
 
 def test_inject_run_id_does_not_mutate_resume_from(monkeypatch):
@@ -57,4 +66,20 @@ def test_detects_explicit_tensorboard_run_name_override_key():
     )
     assert not _has_explicit_tensorboard_run_name_override(
         ["logging.tensorboard_logdir=runs_tb"]
+    )
+
+
+def test_inject_run_id_appends_checkpoint_name_when_set(monkeypatch):
+    config = ExperimentConfig()
+    config.system.name = "ppo"
+    config.env.env_name = "rustpool:BinPack-v0"
+    config.checkpointing.checkpoint_dir = "checkpoints"
+    config.checkpointing.checkpoint_name = "best-model:v1"
+
+    monkeypatch.setattr("jax_rl.cli.time.strftime", lambda _: "20260306_141516")
+
+    updated, _ = inject_run_id(config)
+
+    assert updated.checkpointing.checkpoint_dir.endswith(
+        "checkpoints/ppo/rustpool_BinPack_v0/20260306_141516/best_model_v1"
     )
