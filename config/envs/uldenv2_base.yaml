@@ -1,0 +1,74 @@
+# @package _global_
+
+env:
+  # The "rlpallet:" prefix is critical for jax_rl's stateful cleanup (release_batch).
+  # This config strictly targets the V2 variant:
+  # - "rlpallet:UldEnv-v2" (Group/SKU-based observation, oriented actions, requires twophase generator)
+  env_name: "rlpallet:UldEnv-v2"
+  seed: 42
+  
+  env_kwargs:
+    # --- Observation Space Capacities (V2 Specific) ---
+    # target_groups: (Integer) Fixed size of the grouped observation space (max unique SKUs)
+    target_groups: 32      
+    # max_items: (Integer) Physical tracking capacity for rendering/sim (must be >= target_groups)
+    max_items: 25          
+    # max_ems: (Integer) Capacity for Empty Maximal Spaces tracking
+    max_ems: 60            
+
+    # --- Procedural Generation (Training) ---
+    # generator_type choices:
+    # - "basic": Pure geometric splitting (fast, no physics guarantees)
+    # - "physics": Standard items with gravity/stability checks
+    # - "twophase": Grouped SKUs via hierarchical splitting (no physics)
+    # - "twophase_physics": Grouped SKUs with geometric constraints and physics (Best for V2)
+    # - "dataset": Replays fixed CSV dataset (typically used for evaluation)
+    generator_type: "twophase_physics" 
+    
+    # max_mult: (Integer) Max identical items per SKU group (applies to twophase generators)
+    max_mult: 5            
+    # prob_split_one_item: (Float 0.0-1.0) Probability of splitting a volume into 2 unequal parts vs N identical parts
+    prob_split_one_item: 0.7
+    # split_num_same_items: (Integer) Max number of slices when multi-splitting into identical items
+    split_num_same_items: 5
+    # min_dimension: (Integer) Minimum item dimension in mm
+    min_dimension: 150     
+
+    # --- Container Setup ---
+    # uld_preset choices (from embedded JSONs): 
+    # "AKE-PLD", "B737NS2", "PGA-Q5", "PLA-PLD", "PLA-PWG", 
+    # "PMC-PLD", "PMC-PWG", "PMC-Q5", "PMC-Q6", "uld_setup" (dummy default)
+    uld_preset: "PMC-PLD"  
+
+    # --- Reward Function ---
+    # reward_type choices:
+    # - "dense": Volume utilized per step (Default)
+    # - "sparse": Final volume utilization at the end of the episode
+    # - "stability": Dense volume + bonus for stable/supported placements
+    # - "convex_hull" or "compactness": Dense reward based on convex hull volume ratio
+    # - "hull_sparse": Sparse hull volume ratio at end of episode
+    # - "gravity_support": Dense volume + penalty for lost space due to overhangs
+    # - "floor_plan": Dense volume + reward for creating wide flat surfaces
+    reward_type: "dense"   
+
+# --- Base Evaluations Block ---
+evaluations:
+  eval_dataset:
+    env: ${env}
+    num_episodes: 100
+    eval_every: 50
+    greedy: true
+    # action_selection choices: 
+    # - "policy": Standard network forward pass (fast)
+    # - "search": AlphaZero/SPO MCTS search (requires anakin SPO runner)
+    action_selection: "search" 
+    env_kwargs:
+      # Override generator for deterministic dataset replay during evaluation
+      generator_type: "dataset"
+      dataset_path: "data/uldenv_eval_data.csv"
+      
+      # Inherit capacities from training to perfectly match network dimensions
+      target_groups: 32
+      max_items: 50
+      max_ems: 60
+      uld_preset: "PMC-PLD"

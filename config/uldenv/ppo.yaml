@@ -1,7 +1,7 @@
 defaults:
   - /base_config
   - /system: ppo
-  - /env: uldenv2_base
+  - /envs: uldenv2_base
   - _self_
 
 env:

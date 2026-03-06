@@ -1,7 +1,7 @@
 defaults:
   - /base_config
   - /system: alphazero
-  - /env: uldenv2_base
+  - /envs: uldenv2_base
   - _self_
 
 env:
