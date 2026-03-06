@@ -30,7 +30,7 @@ coverage.xml
 *.log
 
 # --- Project runtime outputs ---
-checkpoints/*
+checkpoints/
 runs/
 runs_tb/
 tensorboard/

@@ -57,6 +57,15 @@ def _reshape_flat_batch(x: jax.Array, batch_size: int, num_particles: int) -> ja
     return x.reshape((batch_size, num_particles) + x.shape[1:])
 
 
+def _apply_safe_action_mask(logits: jax.Array, action_mask: jax.Array) -> jax.Array:
+    mask = jnp.asarray(action_mask, dtype=jnp.bool_)
+    if mask.ndim == 1:
+        mask = mask[jnp.newaxis, :]
+    has_any_valid = jnp.any(mask, axis=-1, keepdims=True)
+    safe_mask = jnp.where(has_any_valid, mask, jnp.ones_like(mask, dtype=jnp.bool_))
+    return jnp.where(safe_mask, logits, jnp.asarray(-1e9, dtype=logits.dtype))
+
+
 def _sanitize_terminal_rustpool_inputs(
     *,
     state_embedding: jax.Array,
@@ -107,20 +116,19 @@ def make_root_fn(config) -> Callable[[SPOParams, Any, Any, jax.Array], SPORootFn
         )
         mixed_probs = (1.0 - dirichlet_fraction) * prior_probs + dirichlet_fraction * noise
 
-        # --- NEW: Mask out invalid actions after adding noise ---
         if isinstance(observation, dict) and "action_mask" in observation:
             action_mask = jnp.asarray(observation["action_mask"], dtype=jnp.bool_)
-            mixed_probs = jnp.where(action_mask, mixed_probs, 0.0)
-            # Re-normalize so probabilities sum to 1
+            has_any_valid = jnp.any(action_mask, axis=-1, keepdims=True)
+            safe_mask = jnp.where(has_any_valid, action_mask, jnp.ones_like(action_mask, dtype=jnp.bool_))
+            mixed_probs = jnp.where(safe_mask, mixed_probs, 0.0)
             mixed_probs = mixed_probs / jnp.clip(jnp.sum(mixed_probs, axis=-1, keepdims=True), a_min=1e-8)
             mixed_logits = jnp.where(
-                action_mask,
+                safe_mask,
                 jnp.log(jnp.clip(mixed_probs, a_min=1e-8)),
                 jnp.asarray(-1e9, dtype=jnp.float32),
             )
         else:
             mixed_logits = jnp.log(jnp.clip(mixed_probs, a_min=1e-8))
-        # --------------------------------------------------------
 
         action_keys = jax.random.split(key_actions, batch_size)
         particle_actions = jax.vmap(
@@ -208,6 +216,8 @@ def make_recurrent_fn(
                 next_timestep = _reshape_timestep_tree(next_timestep_flat, batch_size, num_particles)
 
             next_state_ids = jnp.asarray(next_timestep.extras["state_id"], dtype=jnp.int32)
+            invalid_state_ids = next_state_ids <= 0
+            safe_next_state_ids = jnp.where(invalid_state_ids, state_ids, next_state_ids)
 
             flat_obs = _flatten_particle_obs(next_timestep.observation)
 
@@ -221,14 +231,32 @@ def make_recurrent_fn(
                 params.critic_target.state,
                 flat_obs,
             )
+            flat_prior_logits = jnp.asarray(_distribution_logits(actor_dist), dtype=jnp.float32)
+            if isinstance(flat_obs, dict) and "action_mask" in flat_obs:
+                flat_prior_logits = _apply_safe_action_mask(
+                    flat_prior_logits,
+                    jnp.asarray(flat_obs["action_mask"], dtype=jnp.bool_),
+                )
+
+            flat_action_keys = jax.random.split(key, int(flat_prior_logits.shape[0]))
+            flat_next_action = jax.vmap(
+                lambda sample_key, sample_logits: jax.random.categorical(sample_key, sample_logits),
+                in_axes=(0, 0),
+            )(flat_action_keys, flat_prior_logits)
+
             prior_logits = _reshape_flat_batch(
-                _distribution_logits(actor_dist),
+                flat_prior_logits,
                 batch_size,
                 num_particles,
             )
             timestep_discount = jnp.asarray(next_timestep.discount, dtype=jnp.float32)
+            timestep_discount = jnp.where(
+                invalid_state_ids,
+                jnp.zeros_like(timestep_discount),
+                timestep_discount,
+            )
             next_action = _reshape_flat_batch(
-                jnp.asarray(actor_dist.sample(key), dtype=jnp.int32),
+                jnp.asarray(flat_next_action, dtype=jnp.int32),
                 batch_size,
                 num_particles,
             )
@@ -245,7 +273,7 @@ def make_recurrent_fn(
                 value=timestep_discount * jnp.asarray(critic_value, dtype=jnp.float32),
                 next_sampled_action=next_action,
             )
-            return recurrent_output, next_state_ids
+            return recurrent_output, safe_next_state_ids
 
         return recurrent_fn_rustpool
 
@@ -358,7 +386,7 @@ class SPO:
     ) -> tuple[tuple[Particles, jax.Array], dict[str, jax.Array]]:
         particles, sampled_actions = particles_and_actions
         current_depth, key = depth_count_and_key
-        key_resampling, recurrent_step_key = jax.random.split(key)
+        key_resampling, recurrent_step_key, next_action_key = jax.random.split(key, 3)
 
         use_rustpool_terminal_guard = isinstance(particles.state_embedding, jax.Array)
         if use_rustpool_terminal_guard:
@@ -482,7 +510,17 @@ class SPO:
             "resample": resample_metric,
             "generated_state_ids": jnp.asarray(next_state_embedding, dtype=jnp.int32),
         }
-        return (updated_particles, recurrent_output.next_sampled_action), step_metrics
+
+        next_logits = jnp.asarray(updated_particles.prior_logits, dtype=jnp.float32)
+        flat_next_logits = next_logits.reshape((-1, next_logits.shape[-1]))
+        flat_next_keys = jax.random.split(next_action_key, int(flat_next_logits.shape[0]))
+        flat_next_actions = jax.vmap(
+            lambda sample_key, sample_logits: jax.random.categorical(sample_key, sample_logits),
+            in_axes=(0, 0),
+        )(flat_next_keys, flat_next_logits)
+        next_sampled_actions = flat_next_actions.reshape(next_logits.shape[:2]).astype(jnp.int32)
+
+        return (updated_particles, next_sampled_actions), step_metrics
 
     def init_particles(self, root: SPORootFnOutput) -> Particles:
         batch_size = root.particle_values.shape[0]

@@ -195,7 +195,7 @@ Training continues up to `arch.total_timesteps`.
 
 ## Architecture
 
-`jax_rl` is a modular PPO implementation combining:
+`jax_rl` is a modular PPO/SPO/AlphaZero implementation combining:
 
 - Functional state flow (`TrainState`, explicit PRNG threading)
 - JAX transforms (`pmap`, `lax.scan`) for batched rollouts and updates
@@ -203,6 +203,39 @@ Training continues up to `arch.total_timesteps`.
 - Separate actor/critic Optax optimizers
 - Orbax checkpointing
 - Multi-backend environment routing (`rustpool`, `jaxpallet`, Gymnax fallback)
+
+## Recent Stability Fixes (rlpallet UldEnv)
+
+Recent fixes addressed hard-to-reproduce invalid-action behavior on `rlpallet:UldEnv-v2`, especially for SPO search:
+
+- rlpallet probe initialization in `jax_rl` is now mask-aware and avoids invalid synthetic probe actions.
+- PPO/Modular policy paths include safe all-invalid mask fallback.
+- SPO search now applies explicit safe masking in both root and recurrent sampling.
+- SPO rollout now re-samples next particle actions from post-resample logits (fixes action/state misalignment).
+- SPO recurrent rollout treats non-positive simulated `state_id` as terminal to avoid re-expanding invalid simulated states.
+
+These changes eliminate startup invalid-action spam for PPO/AlphaZero and significantly harden SPO against simulation-side invalid action propagation.
+
+## SPO Evaluation Modes
+
+SPO supports two evaluation action-selection modes in `evaluations.<name>.action_selection`:
+
+- `policy`: direct policy action selection (no SPO search)
+- `search`: SPO search-based action selection
+
+Example (`config/spo/train_uldenv.yaml`):
+
+```yaml
+evaluations:
+  policy_eval:
+    action_selection: policy
+    env_name: rlpallet:UldEnv-v2
+    num_episodes: 32
+  search_eval:
+    action_selection: search
+    env_name: rlpallet:UldEnv-v2
+    num_episodes: 32
+```
 
 ### Runtime Entry
 

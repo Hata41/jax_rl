@@ -117,4 +117,27 @@ logging:
   # Runtime sets this to run_id unless explicitly overridden from CLI.
   tensorboard_run_name: spo_uldenv
 
-evaluations: {}
+evaluations:
+  policy_eval:
+    # Choices: policy | search
+    action_selection: policy
+    env_name: rlpallet:UldEnv-v2
+    env_kwargs:
+      max_items: 10
+      target_groups: 10
+    eval_every: 1
+    num_episodes: 32
+    max_steps_per_episode: 30
+    greedy: true
+
+  search_eval:
+    # Choices: policy | search
+    action_selection: search
+    env_name: rlpallet:UldEnv-v2
+    env_kwargs:
+      max_items: 10
+      target_groups: 10
+    eval_every: 1
+    num_episodes: 32
+    max_steps_per_episode: 30
+    greedy: true

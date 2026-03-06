@@ -152,6 +152,20 @@ def main(cfg: DictConfig) -> None:
                 env_kwargs=dict(eval_cfg.get("env_kwargs", config.env.env_kwargs)),
                 action_selection=str(eval_cfg.get("action_selection", "policy")),
             )
+        elif system_name == "spo":
+            from .systems.spo.eval import evaluate as spo_evaluate
+
+            eval_metrics = spo_evaluate(
+                params=output["params"],
+                config=config,
+                env_name=env_name,
+                seed=config.env.seed,
+                num_episodes=num_episodes,
+                max_steps_per_episode=int(eval_cfg.get("max_steps_per_episode", 1_000)),
+                greedy=bool(eval_cfg.get("greedy", True)),
+                env_kwargs=dict(eval_cfg.get("env_kwargs", config.env.env_kwargs)),
+                action_selection=str(eval_cfg.get("action_selection", "policy")),
+            )
         else:
             eval_metrics = ppo_evaluate(
                 params=output["params"],

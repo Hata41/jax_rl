@@ -18,7 +18,7 @@ from jax_rl.systems.alphazero.steps import extract_root_embedding
 from jax_rl.systems.spo.losses import categorical_mpo_loss
 from jax_rl.systems.spo.anakin.steps import _critic_loss
 from jax_rl.systems.spo.steps import SPO, make_recurrent_fn, make_root_fn
-from jax_rl.systems.spo.types import CategoricalDualParams, SPOParams
+from jax_rl.systems.spo.types import CategoricalDualParams, Particles, SPOParams, SPORecurrentFnOutput
 from jax_rl.systems.spo.anakin.system import train
 from jax_rl.utils.shapes import space_feature_dim, space_flat_dim
 
@@ -70,6 +70,11 @@ class _DummyDist:
     def entropy(self):
         p = jax.nn.softmax(self.logits, axis=-1)
         return -jnp.sum(p * jnp.log(jnp.clip(p, a_min=1e-8)), axis=-1)
+
+
+class _LogitsOnlyDist:
+    def __init__(self, logits):
+        self.logits = logits
 
 
 
@@ -310,6 +315,188 @@ def test_spo_recurrent_fn_shape_handling():
     assert env.flat_shape == (32,)
     assert next_embedding.shape == (4, 8)
     assert recurrent_output.reward.shape == (4, 8)
+
+
+def test_spo_recurrent_fn_respects_action_mask_for_sampled_actions(monkeypatch):
+    env = _MockRustpoolEnv()
+    params = _make_spo_params()
+
+    def _fake_policy_value_apply(graphdef, state, obs):
+        del graphdef, state
+        if isinstance(obs, dict):
+            batch = int(jnp.asarray(obs["action_mask"]).shape[0])
+            action_dim = int(jnp.asarray(obs["action_mask"]).shape[-1])
+        else:
+            batch = int(jnp.asarray(obs).shape[0])
+            action_dim = 5
+        logits = jnp.broadcast_to(
+            jnp.linspace(5.0, 1.0, action_dim, dtype=jnp.float32)[None, :],
+            (batch, action_dim),
+        )
+        values = jnp.zeros((batch,), dtype=jnp.float32)
+        return _LogitsOnlyDist(logits), values
+
+    monkeypatch.setattr("jax_rl.systems.spo.steps.policy_value_apply", _fake_policy_value_apply)
+
+    def _simulate_with_mask(state, state_ids, actions):
+        del state, actions
+        n = state_ids.shape[0]
+        action_mask = jnp.zeros((n, 5), dtype=jnp.bool_).at[:, 3].set(True)
+        timestep = TimeStep(
+            step_type=jnp.full((n,), StepType.MID, dtype=jnp.int8),
+            reward=jnp.zeros((n,), dtype=jnp.float32),
+            discount=jnp.ones((n,), dtype=jnp.float32),
+            observation={
+                "ems_pos": jnp.ones((n, 2), dtype=jnp.float32),
+                "item_dims": jnp.ones((n, 3), dtype=jnp.float32),
+                "item_mask": jnp.ones((n, 3), dtype=jnp.bool_),
+                "action_mask": action_mask,
+            },
+            extras={"state_id": state_ids + 1},
+        )
+        return state_ids, timestep
+
+    monkeypatch.setattr(env, "simulate_batch", _simulate_with_mask)
+
+    recurrent_fn = make_recurrent_fn(
+        env=env,
+        env_params=None,
+        gamma=0.99,
+        is_rustpool=True,
+    )
+
+    batch_size, num_particles = 4, 8
+    actions = jnp.zeros((batch_size, num_particles), dtype=jnp.int32)
+    state_embedding = jnp.arange(batch_size * num_particles, dtype=jnp.int32).reshape(batch_size, num_particles)
+
+    recurrent_output, _ = recurrent_fn(params, jax.random.PRNGKey(0), actions, state_embedding)
+    assert jnp.all(jnp.asarray(recurrent_output.next_sampled_action, dtype=jnp.int32) == 3)
+
+
+def test_spo_recurrent_fn_marks_non_positive_state_ids_as_terminal(monkeypatch):
+    env = _MockRustpoolEnv()
+    params = _make_spo_params()
+
+    def _fake_policy_value_apply(graphdef, state, obs):
+        del graphdef, state
+        if isinstance(obs, dict):
+            batch = int(jnp.asarray(obs["action_mask"]).shape[0])
+            action_dim = int(jnp.asarray(obs["action_mask"]).shape[-1])
+        else:
+            batch = int(jnp.asarray(obs).shape[0])
+            action_dim = 5
+        logits = jnp.zeros((batch, action_dim), dtype=jnp.float32)
+        values = jnp.ones((batch,), dtype=jnp.float32)
+        return _LogitsOnlyDist(logits), values
+
+    monkeypatch.setattr("jax_rl.systems.spo.steps.policy_value_apply", _fake_policy_value_apply)
+
+    def _simulate_with_invalid_state_ids(state, state_ids, actions):
+        del state, actions
+        n = state_ids.shape[0]
+        timestep = TimeStep(
+            step_type=jnp.full((n,), StepType.MID, dtype=jnp.int8),
+            reward=jnp.ones((n,), dtype=jnp.float32),
+            discount=jnp.ones((n,), dtype=jnp.float32),
+            observation={
+                "ems_pos": jnp.ones((n, 2), dtype=jnp.float32),
+                "item_dims": jnp.ones((n, 3), dtype=jnp.float32),
+                "item_mask": jnp.ones((n, 3), dtype=jnp.bool_),
+                "action_mask": jnp.ones((n, 5), dtype=jnp.bool_),
+            },
+            extras={"state_id": jnp.zeros((n,), dtype=jnp.int32)},
+        )
+        return state_ids, timestep
+
+    monkeypatch.setattr(env, "simulate_batch", _simulate_with_invalid_state_ids)
+
+    recurrent_fn = make_recurrent_fn(
+        env=env,
+        env_params=None,
+        gamma=0.99,
+        is_rustpool=True,
+    )
+
+    batch_size, num_particles = 2, 3
+    actions = jnp.zeros((batch_size, num_particles), dtype=jnp.int32)
+    state_embedding = jnp.arange(batch_size * num_particles, dtype=jnp.int32).reshape(batch_size, num_particles)
+
+    recurrent_output, next_state_ids = recurrent_fn(
+        params,
+        jax.random.PRNGKey(1),
+        actions,
+        state_embedding,
+    )
+
+    assert jnp.all(jnp.asarray(recurrent_output.discount, dtype=jnp.float32) == 0.0)
+    assert jnp.array_equal(jnp.asarray(next_state_ids, dtype=jnp.int32), jnp.asarray(state_embedding, dtype=jnp.int32))
+
+
+def test_spo_one_step_rollout_samples_actions_from_post_resample_logits(monkeypatch):
+    config = _make_config(num_particles=2, search_depth=1)
+    config = config.__class__(
+        env=config.env,
+        arch=config.arch,
+        system=SystemConfig(
+            name="spo",
+            num_particles=2,
+            search_depth=1,
+            spo_resampling_mode="period",
+            spo_resampling_period=1,
+            warmup_steps=0,
+            total_buffer_size=64,
+            total_batch_size=16,
+            sample_sequence_length=1,
+            period=1,
+            learner_updates_per_cycle=1,
+        ),
+        checkpointing=config.checkpointing,
+        logging=config.logging,
+        evaluations=config.evaluations,
+        network=config.network,
+    )
+
+    def _fake_recurrent_fn(params, key, particle_actions, state_embedding):
+        del params, key, particle_actions
+        batch_size, num_particles = state_embedding.shape
+        recurrent_output = SPORecurrentFnOutput(
+            reward=jnp.zeros((batch_size, num_particles), dtype=jnp.float32),
+            discount=jnp.ones((batch_size, num_particles), dtype=jnp.float32),
+            prior_logits=jnp.zeros((batch_size, num_particles, 3), dtype=jnp.float32),
+            value=jnp.zeros((batch_size, num_particles), dtype=jnp.float32),
+            next_sampled_action=jnp.zeros((batch_size, num_particles), dtype=jnp.int32),
+        )
+        return recurrent_output, state_embedding
+
+    search = SPO(config, _fake_recurrent_fn)
+
+    def _fake_resample(self, particles, key, resample_logits):
+        del key, resample_logits
+        post_logits = jnp.full_like(particles.prior_logits, jnp.asarray(-1e9, dtype=jnp.float32))
+        post_logits = post_logits.at[..., 2].set(0.0)
+        return particles._replace(prior_logits=post_logits)
+
+    monkeypatch.setattr(SPO, "resample", _fake_resample)
+
+    particles = Particles(
+        state_embedding=jnp.array([[10, 11]], dtype=jnp.int32),
+        root_actions=jnp.array([[0, 1]], dtype=jnp.int32),
+        resample_td_weights=jnp.zeros((1, 2), dtype=jnp.float32),
+        prior_logits=jnp.zeros((1, 2, 3), dtype=jnp.float32),
+        value=jnp.zeros((1, 2), dtype=jnp.float32),
+        terminal=jnp.zeros((1, 2), dtype=jnp.bool_),
+        depth=jnp.zeros((1, 2), dtype=jnp.int32),
+        gae=jnp.zeros((1, 2), dtype=jnp.float32),
+    )
+    sampled_actions = jnp.zeros((1, 2), dtype=jnp.int32)
+
+    (_, carried_actions), _ = search.one_step_rollout(
+        (particles, sampled_actions),
+        (jnp.asarray(0, dtype=jnp.int32), jax.random.PRNGKey(0)),
+        _make_spo_params(),
+    )
+
+    assert jnp.all(jnp.asarray(carried_actions, dtype=jnp.int32) == 2)
 
 
 def test_spo_recurrent_fn_ignores_env_capacity_hint():

@@ -96,7 +96,7 @@ class RustpoolObsWrapper(Wrapper):
         return state, self._normalize_timestep(timestep)
 
     def simulate_batch(self, state, state_ids, actions):
-        state, timestep = self._env.simulate_batch(state, state_ids, actions)
+        state, timestep = cast(Any, self._env).simulate_batch(state, state_ids, actions)
         return state, self._normalize_timestep(timestep)
 
 @register_env("rustpool")
@@ -175,14 +175,32 @@ def _make_rlpallet_env(env_name: str, num_envs_per_device: int, env_kwargs: dict
             )
             self._env_ids_by_device[0] = env_ids
 
+            action_mask = info_reset.get("action_mask") if hasattr(info_reset, "get") else None
+            probe_action = np.zeros(self.num_envs_per_device, dtype=np.int32)
+            if action_mask is not None:
+                mask_arr = np.asarray(action_mask, dtype=np.bool_)
+                if mask_arr.ndim == 2 and mask_arr.shape[0] == self.num_envs_per_device:
+                    has_any_valid = np.any(mask_arr, axis=-1)
+                    first_valid = np.argmax(mask_arr.astype(np.int32), axis=-1).astype(np.int32)
+                    probe_action = np.where(has_any_valid, first_valid, probe_action)
+
+            pool.send(probe_action, env_ids)
+            obs_step, reward_step, _done_step, info_step = pool.recv()
+            self._env_ids_by_device[0] = np.asarray(
+                info_step.get("env_id", env_ids), dtype=np.int32
+            )
+
             probe_info = dict(info_reset)
+            probe_info.update(info_step)
             if "state_id" not in probe_info:
                 probe_info["state_id"] = np.zeros(
                     self.num_envs_per_device, dtype=np.int32
                 )
 
-            obs_probe = self._normalize_tree(obs_reset)
-            reward_probe = np.asarray(reward_reset, dtype=np.float32)
+            obs_probe = self._normalize_tree(obs_step)
+            reward_probe = np.asarray(reward_step, dtype=np.float32)
+            if reward_probe.shape != (self.num_envs_per_device,):
+                reward_probe = np.asarray(reward_reset, dtype=np.float32)
             if reward_probe.shape != (self.num_envs_per_device,):
                 reward_probe = np.zeros((self.num_envs_per_device,), dtype=np.float32)
 
@@ -190,9 +208,9 @@ def _make_rlpallet_env(env_name: str, num_envs_per_device: int, env_kwargs: dict
             self._obs_spec = self.sharded_pools[0].observation_spec()
             self._action_spec = self.sharded_pools[0].action_spec()
 
-        def reset(self, rng_key, env_params=None):
+        def reset(self, key, env_params=None):
             self._ensure_structs_initialized()
-            return super().reset(rng_key, env_params)
+            return super().reset(key, env_params)
 
         def observation_space(self, env_params=None):
             self._ensure_structs_initialized()
