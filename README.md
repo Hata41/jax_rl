@@ -223,7 +223,7 @@ SPO supports two evaluation action-selection modes in `evaluations.<name>.action
 - `policy`: direct policy action selection (no SPO search)
 - `search`: SPO search-based action selection
 
-Example (`config/spo/train_uldenv.yaml`):
+Example (`config/uldenv/spo.yaml`):
 
 ```yaml
 evaluations:

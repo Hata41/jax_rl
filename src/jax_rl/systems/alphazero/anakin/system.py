@@ -79,6 +79,12 @@ def train(config: ExperimentConfig):
                     "AlphaZero search produced non-finite action weights or values."
                 )
 
+            act_metrics = dict(rollout_metrics)
+            act_metrics["steps_per_second"] = timer.steps_per_second(
+                "act",
+                config.arch.num_envs * config.arch.num_steps,
+            )
+
             with timer.phase("train"):
                 runner_state, train_metrics = pmap_update(runner_state, rollout_outputs)
 
@@ -99,7 +105,10 @@ def train(config: ExperimentConfig):
             train_metrics["learning_rate"] = extract_learning_rate(actor_opt_state)
 
             log_step = (update_idx + 1) * config.rollout_batch_size
+            misc_metrics = {"timestep": float(log_step)}
+            logger.log(act_metrics, log_step, LogEvent.ACT)
             logger.log(train_metrics, log_step, LogEvent.TRAIN)
+            logger.log(misc_metrics, log_step, LogEvent.ABSOLUTE)
 
             eval_metrics = evaluation_manager.run_if_needed(
                 update_idx=update_idx,
@@ -109,17 +118,12 @@ def train(config: ExperimentConfig):
             if eval_metrics:
                 logger.log(eval_metrics, log_step, LogEvent.EVAL)
 
-            latest_metrics = {
-                key: float(value) if hasattr(value, "__float__") else value
-                for key, value in train_metrics.items()
-            }
+            latest_metrics = {}
+            latest_metrics.update(logger.materialize(act_metrics, LogEvent.ACT))
+            latest_metrics.update(logger.materialize(train_metrics, LogEvent.TRAIN))
+            latest_metrics.update(logger.materialize(misc_metrics, LogEvent.ABSOLUTE))
             if eval_metrics:
-                latest_metrics.update(
-                    {
-                        key: float(value) if hasattr(value, "__float__") else value
-                        for key, value in eval_metrics.items()
-                    }
-                )
+                latest_metrics.update(logger.materialize(eval_metrics, LogEvent.EVAL))
 
             if config.checkpointing.save_interval_steps > 0 and (
                 (update_idx + 1) % config.checkpointing.save_interval_steps == 0
@@ -135,7 +139,7 @@ def train(config: ExperimentConfig):
                 checkpoint_metric = (
                     max(eval_return_values)
                     if eval_return_values
-                    else float(-latest_metrics.get("loss_total", 0.0))
+                    else float(-latest_metrics.get("train/loss_total", 0.0))
                 )
                 system.checkpointer.save(
                     timestep=update_idx + 1,

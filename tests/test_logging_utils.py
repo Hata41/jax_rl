@@ -6,7 +6,13 @@ import numpy as np
 from colorama import Fore
 
 from jax_rl.configs.config import ExperimentConfig, LoggingConfig
-from jax_rl.utils.logging import BaseLogger, ConsoleLogger, describe, jaxRL_Logger
+from jax_rl.utils.logging import (
+    BaseLogger,
+    ConsoleLogger,
+    describe,
+    format_colored_block,
+    jaxRL_Logger,
+)
 from jax_rl.utils.types import LogEvent
 
 
@@ -57,6 +63,40 @@ def test_console_logger_tabular_alignment_for_described_metrics():
     first_value_column = lines[1].index("5 ")
     second_value_column = lines[2].index("10 ")
     assert first_value_column == second_value_column
+
+
+def test_console_logger_log_config_is_formatted_and_colored():
+    stream = StringIO()
+    logger = ConsoleLogger(stream=stream)
+
+    logger.log_config(
+        {
+            "env": {"env_name": "rlpallet:UldEnv-v2", "seed": 0},
+            "system": {"name": "spo", "gamma": 0.99},
+        }
+    )
+
+    output = stream.getvalue()
+    assert "RUN CONFIG" in output
+    assert '"env"' in output
+    assert '"rlpallet:UldEnv-v2"' in output
+    assert Fore.BLUE in output
+    assert Fore.CYAN in output
+
+
+def test_format_colored_block_renders_metadata_path():
+    rendered = format_colored_block(
+        "CHECKPOINT METADATA",
+        {
+            "path": "checkpoints/spo/rlpallet_UldEnv_v2/20260306_165119/metadata/_ROOT_METADATA",
+            "metadata": {"config": {"system": {"name": "spo"}}},
+        },
+    )
+
+    assert "CHECKPOINT METADATA" in rendered
+    assert '"path"' in rendered
+    assert "_ROOT_METADATA" in rendered
+    assert Fore.BLUE in rendered
 
 
 class _MockSink(BaseLogger):

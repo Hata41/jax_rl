@@ -197,20 +197,20 @@ This was difficult because symptoms looked like pure masking failures (`Invalid 
 
 ## Useful Configs
 
-- `config/spo/train_binpack.yaml`
-- `config/spo/train_jaxpallet.yaml`
-- `config/spo/train_uldenv.yaml`
+- `config/binpack/spo.yaml`
+- `config/jaxpallet/spo.yaml`
+- `config/uldenv/spo.yaml`
 
 Example:
 
 ```bash
-uv run jax-rl-train --config-name spo/train_uldenv
+uv run jax-rl-train --config-name uldenv/spo
 ```
 
 Short smoke:
 
 ```bash
-uv run jax-rl-train --config-name spo/train_uldenv arch.total_timesteps=64 arch.num_envs=2 arch.num_steps=1 system.num_particles=2 system.search_depth=2
+uv run jax-rl-train --config-name uldenv/spo arch.total_timesteps=64 arch.num_envs=2 arch.num_steps=1 system.num_particles=2 system.search_depth=2
 ```
 
 ---

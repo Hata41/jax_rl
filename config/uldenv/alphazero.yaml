@@ -1,0 +1,83 @@
+defaults:
+  - /base_config
+  - /system: alphazero
+  - /env: uldenv2_base
+  - _self_
+
+env:
+  seed: 0
+  env_kwargs:
+    target_groups: 10
+    max_items: 20
+    max_ems: 40
+    max_episode_steps: 30
+    generator_type: twophase_physics
+    max_mult: 5
+    prob_split_one_item: 0.3
+    split_num_same_items: 6
+    min_dimension: 100
+    dataset_path: data/eval_data.csv
+    uld_preset: PMC-PLD
+
+arch:
+  total_timesteps: 2048
+  platform: null
+  cuda_visible_devices: null
+  num_envs: 8
+  num_steps: 25
+
+network:
+  _delete_: true
+  _target_: jax_rl.networks.ModularPolicyValueModel
+  input_adapter:
+    _target_: jax_rl.networks.RustpalletInputAdapterV2
+    d_model: 16
+  shared_torso:
+    _target_: jax_rl.networks.BinPackTorso
+    hidden_dim: 16
+    num_heads: 1
+    num_layers: 1
+  actor_head:
+    _target_: jax_rl.networks.BinPackActorHead
+    hidden_dim: 16
+    num_rotations: 6
+  critic_head:
+    _target_: jax_rl.networks.BinPackCriticHead
+    hidden_dim: 16
+
+checkpointing:
+  checkpoint_dir: checkpoints
+  checkpoint_name: null
+  transfer_weights_only: false
+  save_interval_steps: 0
+  max_to_keep: 1
+  keep_period: null
+  resume_from: null
+
+logging:
+  log_every: 1
+  tensorboard_logdir: runs_tb
+  tensorboard_run_name: alphazero_uldenv
+
+evaluations:
+  policy_eval:
+    action_selection: policy
+    env: ${env}
+    env_kwargs:
+      max_items: 10
+      target_groups: 10
+    eval_every: 1
+    num_episodes: 32
+    max_steps_per_episode: 30
+    greedy: true
+
+  search_eval:
+    action_selection: search
+    env: ${env}
+    env_kwargs:
+      max_items: 10
+      target_groups: 10
+    eval_every: 1
+    num_episodes: 32
+    max_steps_per_episode: 30
+    greedy: true

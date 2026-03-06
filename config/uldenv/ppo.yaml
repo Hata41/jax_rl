@@ -1,30 +1,23 @@
 defaults:
   - /base_config
+  - /system: ppo
+  - /env: uldenv2_base
   - _self_
 
 env:
-  # Supported env patterns in this repo: rustpool:<TaskId>, rlpallet:<TaskId>, jaxpallet:<Preset>
-  # Gymnax fallback is also supported when env_name has no registered prefix.
-  env_name: rlpallet:UldEnv-v2
   seed: 0
   env_kwargs:
+    target_groups: 10
     max_items: 10
     max_ems: 40
     max_episode_steps: 30
-    uld_preset: PMC-PLD
     generator_type: twophase_physics
-    target_groups: 10
     max_mult: 5
     prob_split_one_item: 0.3
     split_num_same_items: 6
     min_dimension: 100
-    min_density: 1e-9
-    max_density: 1e-2
     dataset_path: data/eval_data.csv
-    reward_type: dense
-    action_mode: Oriented
-    item_representation: Group
-    parallel_strategy: None
+    uld_preset: PMC-PLD
 
 arch:
   total_timesteps: 2048
@@ -32,24 +25,6 @@ arch:
   cuda_visible_devices: null
   num_envs: 8
   num_steps: 32
-
-system:
-  # Choices: ppo | alphazero
-  name: ppo
-  actor_lr: 0.0003
-  critic_lr: 0.0003
-  # Choices: adam | adamw | sgd | rmsprop | schedule_free_adamw | schedule_free_sgd
-  optimizer: adam
-  # Choices: linear | constant | cosine
-  lr_schedule: linear
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_epsilon: 0.2
-  value_coef: 0.5
-  entropy_coef: 0.01
-  update_epochs: 1
-  minibatch_size: 64
-  max_grad_norm: 0.5
 
 network:
   _delete_: true
@@ -71,30 +46,22 @@ network:
     hidden_dim: 16
 
 checkpointing:
-  # Runtime appends: <checkpoint_dir>/<system.name>/<safe_env_name>/<run_token>
-  # run_token = timestamp by default, or sanitized CLI logging.tensorboard_run_name if explicitly set.
   checkpoint_dir: checkpoints
-  # Optional extra subfolder for naming checkpoints (examples: best_model, ablation_A, resume_exp_3)
   checkpoint_name: null
-  # If true with resume_from set, load only params from checkpoint and reinitialize optimizer states.
-  # Example transfer-learning run: resume_from: checkpoints/old_run/10 + transfer_weights_only: true
   transfer_weights_only: false
   save_interval_steps: 0
   max_to_keep: 1
   keep_period: null
-  # If set, loads weights from this exact path; it is not mutated by runtime path injection.
   resume_from: null
 
 logging:
   log_every: 1
-  # Choices: null to disable TensorBoard, or a base directory (example: runs_tb)
   tensorboard_logdir: runs_tb
-  # Runtime sets this to run_id unless explicitly overridden from CLI.
   tensorboard_run_name: ppo_uldenv
 
 evaluations:
   default_eval:
-    env_name: rlpallet:UldEnv-v2
+    env: ${env}
     env_kwargs:
       max_items: 10
       target_groups: 10
@@ -104,7 +71,7 @@ evaluations:
     greedy: true
 
   stress_eval:
-    env_name: rlpallet:UldEnv-v2
+    env: ${env}
     env_kwargs:
       max_items: 25
       max_ems: 50

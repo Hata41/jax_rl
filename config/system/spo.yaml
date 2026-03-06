@@ -1,0 +1,36 @@
+name: spo
+
+actor_lr: 0.0003
+critic_lr: 0.0003
+dual_lr: 0.0001
+optimizer: adam
+lr_schedule: linear
+gamma: 0.99
+gae_lambda: 0.95
+value_coef: 0.5
+entropy_coef: 0.0
+max_grad_norm: 0.5
+
+mpo_epsilon: 0.1
+mpo_epsilon_policy: 0.05
+dual_init_log_temperature: -2.0
+dual_init_log_alpha: -2.0
+
+target_tau: 0.005
+num_particles: 8
+search_depth: 4
+search_gamma: 0.99
+search_gae_lambda: 0.95
+spo_resampling_mode: ess
+spo_resampling_period: 1
+spo_ess_threshold: 0.5
+
+dirichlet_alpha: 0.3
+dirichlet_fraction: 0.25
+
+total_buffer_size: 2048
+total_batch_size: 256
+sample_sequence_length: 1
+period: 1
+warmup_steps: 16
+learner_updates_per_cycle: 1

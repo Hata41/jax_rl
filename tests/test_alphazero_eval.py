@@ -68,11 +68,11 @@ def test_hydra_compose_loads_nested_alphazero_config_with_eval_modes():
     register_configs()
     config_dir = str(Path(__file__).resolve().parents[1] / "config")
     with initialize_config_dir(version_base=None, config_dir=config_dir):
-        cfg = compose(config_name="alphazero/train_jaxpallet")
+           cfg = compose(config_name="jaxpallet/alphazero")
 
     obj = OmegaConf.to_object(cfg)
-    if isinstance(obj, dict) and "alphazero" in obj:
-        obj = obj["alphazero"]
+    if isinstance(obj, dict) and len(obj) == 1:
+        obj = next(iter(obj.values()))
     assert isinstance(obj, ExperimentConfig)
     assert obj.system.name == "alphazero"
     assert obj.evaluations["policy_eval"]["action_selection"] == "policy"

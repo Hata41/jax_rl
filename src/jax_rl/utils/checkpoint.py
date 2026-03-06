@@ -1,4 +1,6 @@
+from contextlib import contextmanager
 import json
+import logging
 from pathlib import Path
 from typing import Any, TypedDict, cast
 
@@ -6,6 +8,7 @@ import jax
 import orbax.checkpoint as ocp
 
 from .exceptions import CheckpointRestoreError
+from .logging import format_colored_block
 from .types import PolicyValueParams, TrainState
 
 
@@ -13,6 +16,38 @@ class RestorePayload(TypedDict):
     step: int
     items: dict[str, Any]
     metadata: dict[str, Any]
+
+
+@contextmanager
+def _suppress_orbax_startup_logs():
+    absl_logger = logging.getLogger("absl")
+    orbax_logger = logging.getLogger("orbax")
+    previous_absl_level = absl_logger.level
+    previous_orbax_level = orbax_logger.level
+    previous_absl_verbosity = None
+
+    try:
+        try:
+            from absl import logging as absl_logging
+
+            previous_absl_verbosity = absl_logging.get_verbosity()
+            absl_logging.set_verbosity(absl_logging.WARNING)
+        except Exception:
+            previous_absl_verbosity = None
+
+        absl_logger.setLevel(logging.WARNING)
+        orbax_logger.setLevel(logging.WARNING)
+        yield
+    finally:
+        absl_logger.setLevel(previous_absl_level)
+        orbax_logger.setLevel(previous_orbax_level)
+        if previous_absl_verbosity is not None:
+            try:
+                from absl import logging as absl_logging
+
+                absl_logging.set_verbosity(previous_absl_verbosity)
+            except Exception:
+                pass
 
 
 class Checkpointer:
@@ -36,11 +71,22 @@ class Checkpointer:
             best_fn=lambda value: value["metric"],
             best_mode="max",
         )
-        self._manager = ocp.CheckpointManager(
-            str(self._checkpoint_dir),
-            self._checkpointer,
-            options=self._options,
-            metadata=self._metadata,
+        with _suppress_orbax_startup_logs():
+            self._manager = ocp.CheckpointManager(
+                str(self._checkpoint_dir),
+                self._checkpointer,
+                options=self._options,
+                metadata=self._metadata,
+            )
+        metadata_path = self._checkpoint_dir / "metadata" / "_ROOT_METADATA"
+        print(
+            format_colored_block(
+                "CHECKPOINT METADATA",
+                {
+                    "path": str(metadata_path),
+                    "metadata": self._metadata,
+                },
+            )
         )
 
 

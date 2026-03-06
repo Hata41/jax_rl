@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import asdict, is_dataclass
+import json
+from numbers import Number
 from pathlib import Path
 import sys
 import time
@@ -90,6 +92,66 @@ def _format_console_value(value: float) -> str:
     if not np.isfinite(value):
         return str(value)
     return f"{value:.6g}"
+
+
+def _to_serializable(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return {str(k): _to_serializable(v) for k, v in asdict(value).items()}
+    if isinstance(value, Mapping):
+        return {str(k): _to_serializable(v) for k, v in value.items()}
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return [_to_serializable(v) for v in value]
+    if isinstance(value, list):
+        return [_to_serializable(v) for v in value]
+    return value
+
+
+def _colorize_json(value: Any, indent: int = 0, indent_step: int = 2) -> str:
+    if isinstance(value, Mapping):
+        items = list(value.items())
+        if not items:
+            return "{}"
+        lines = ["{"]
+        for idx, (key, sub_value) in enumerate(items):
+            comma = "," if idx < len(items) - 1 else ""
+            key_text = f'{Fore.CYAN}{json.dumps(str(key))}{Style.RESET_ALL}'
+            value_text = _colorize_json(sub_value, indent=indent + indent_step, indent_step=indent_step)
+            lines.append(
+                f"{' ' * (indent + indent_step)}{key_text}: {value_text}{comma}"
+            )
+        lines.append(f"{' ' * indent}}}")
+        return "\n".join(lines)
+
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        lines = ["["]
+        for idx, item in enumerate(value):
+            comma = "," if idx < len(value) - 1 else ""
+            item_text = _colorize_json(item, indent=indent + indent_step, indent_step=indent_step)
+            lines.append(f"{' ' * (indent + indent_step)}{item_text}{comma}")
+        lines.append(f"{' ' * indent}]")
+        return "\n".join(lines)
+
+    if value is None:
+        return f"{Style.DIM}null{Style.RESET_ALL}"
+    if isinstance(value, bool):
+        return f"{Fore.MAGENTA}{str(value).lower()}{Style.RESET_ALL}"
+    if isinstance(value, Number):
+        return f"{Fore.YELLOW}{value}{Style.RESET_ALL}"
+    if isinstance(value, str):
+        return f"{Fore.GREEN}{json.dumps(value)}{Style.RESET_ALL}"
+    return f"{Fore.GREEN}{json.dumps(str(value))}{Style.RESET_ALL}"
+
+
+def format_colored_block(title: str, payload: Mapping[str, Any]) -> str:
+    serialized = _to_serializable(payload)
+    top_border = f"{Fore.BLUE}{Style.BRIGHT}{'=' * 88}{Style.RESET_ALL}"
+    title_line = f"{Fore.BLUE}{Style.BRIGHT}{title}{Style.RESET_ALL}"
+    body = _colorize_json(serialized)
+    return "\n".join((top_border, title_line, top_border, body, top_border))
 
 
 def extract_learning_rate(actor_opt_state) -> float:
@@ -215,7 +277,11 @@ class ConsoleLogger(BaseLogger):
         self._stream.flush()
 
     def log_config(self, config: Mapping[str, Any]) -> None:
-        _ = config
+        if not config:
+            return
+        rendered = format_colored_block("RUN CONFIG", config)
+        self._stream.write(f"{rendered}\n")
+        self._stream.flush()
 
 
 class TensorBoardLogger(BaseLogger):
@@ -327,9 +393,9 @@ class jaxRL_Logger:
 
     def log_config(self, config: Any) -> None:
         if is_dataclass(config) and not isinstance(config, type):
-            config_data = asdict(config)
+            config_data = _to_serializable(config)
         elif isinstance(config, Mapping):
-            config_data = dict(config)
+            config_data = _to_serializable(config)
         else:
             config_data = {"config": str(config)}
         self._dispatch("log_config", config_data)

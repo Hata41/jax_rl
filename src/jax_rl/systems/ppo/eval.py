@@ -4,6 +4,7 @@ from typing import Any, cast
 import jax
 import jax.numpy as jnp
 
+from ...configs.evaluations import resolve_eval_env
 from ...envs.env import make_stoa_env
 from ...networks import policy_value_apply
 from ...utils.exceptions import ConfigDivisibilityError
@@ -176,12 +177,17 @@ class EvaluationManager:
             num_episodes = int(cfg.get("num_episodes", 10))
             if num_episodes <= 0:
                 continue
+            env_name, env_kwargs = resolve_eval_env(
+                cfg,
+                default_env_name=default_env_name,
+                default_env_kwargs=default_env_kwargs,
+            )
             self._evaluator_specs[eval_name] = {
-                "env_name": str(cfg.get("env_name", default_env_name)),
+                "env_name": env_name,
                 "num_episodes": num_episodes,
                 "max_steps_per_episode": int(cfg.get("max_steps_per_episode", 1_000)),
                 "greedy": bool(cfg.get("greedy", True)),
-                "env_kwargs": dict(cfg.get("env_kwargs", default_env_kwargs or {})),
+                "env_kwargs": env_kwargs,
             }
             self._eval_every_by_name[eval_name] = int(cfg.get("eval_every", 10))
 

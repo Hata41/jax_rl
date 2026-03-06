@@ -15,6 +15,34 @@ EnvFactory = Callable[[str, int, dict[str, Any]], tuple[Any, Any]]
 _ENV_REGISTRY: dict[str, EnvFactory] = {}
 
 
+def _is_rlpallet_uldenv_v2(env_name: str) -> bool:
+    prefix, has_prefix, task_id = env_name.partition(":")
+    if not has_prefix or prefix.lower() != "rlpallet":
+        return False
+    normalized_task = task_id.strip().lower().replace("_", "-")
+    return normalized_task == "uldenv-v2"
+
+
+def _apply_uldenv_v2_derived_limits(env_name: str, env_kwargs: dict[str, Any]) -> dict[str, Any]:
+    if not _is_rlpallet_uldenv_v2(env_name):
+        return env_kwargs
+
+    target_groups = env_kwargs.get("target_groups")
+    max_mult = env_kwargs.get("max_mult")
+    if target_groups is None or max_mult is None:
+        return env_kwargs
+
+    try:
+        derived_limit = max(int(target_groups), 0) * max(int(max_mult), 0)
+    except (TypeError, ValueError):
+        return env_kwargs
+
+    updated = dict(env_kwargs)
+    updated["max_items"] = derived_limit
+    updated["max_episode_steps"] = derived_limit
+    return updated
+
+
 def register_env(prefix: str) -> Callable[[EnvFactory], EnvFactory]:
     """Register a backend environment factory under a prefix."""
     normalized = prefix.strip().lower()
@@ -257,6 +285,7 @@ def make_stoa_env(
     env_kwargs: dict[str, Any] | None = None,
 ):
     kwargs_payload = dict(env_kwargs or {})
+    kwargs_payload = _apply_uldenv_v2_derived_limits(env_name, kwargs_payload)
     prefix, has_prefix, _ = env_name.partition(":")
     factory = _ENV_REGISTRY.get(prefix.lower()) if has_prefix else None
 

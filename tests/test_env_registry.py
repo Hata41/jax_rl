@@ -62,3 +62,89 @@ def test_gymnax_fallback_receives_env_kwargs(monkeypatch):
 
     assert captured["name"] == "CartPole-v1"
     assert captured["kwargs"] == {"max_items": 50}
+
+
+def test_uldenv_v2_forces_max_items_and_episode_steps(monkeypatch):
+    original_registry = dict(env_module._ENV_REGISTRY)
+    calls: list[tuple[str, int, dict]] = []
+
+    def _unexpected_gymnax(_name: str):
+        raise AssertionError("Gymnax fallback should not be used for registered prefixes")
+
+    monkeypatch.setattr(env_module, "make_gymnax_env", _unexpected_gymnax)
+
+    try:
+        @env_module.register_env("rlpallet")
+        def _dummy_rlpallet_factory(env_name: str, num_envs_per_device: int, env_kwargs: dict):
+            calls.append((env_name, num_envs_per_device, dict(env_kwargs)))
+            return {"backend": "rlpallet"}, None
+
+        env_module.make_stoa_env(
+            "rlpallet:UldEnv-v2",
+            1,
+            env_kwargs={
+                "target_groups": 7,
+                "max_mult": 4,
+                "max_items": 999,
+                "max_episode_steps": 999,
+            },
+        )
+
+        assert calls == [
+            (
+                "rlpallet:UldEnv-v2",
+                1,
+                {
+                    "target_groups": 7,
+                    "max_mult": 4,
+                    "max_items": 28,
+                    "max_episode_steps": 28,
+                },
+            )
+        ]
+    finally:
+        env_module._ENV_REGISTRY.clear()
+        env_module._ENV_REGISTRY.update(original_registry)
+
+
+def test_non_uldenv_env_keeps_original_env_kwargs(monkeypatch):
+    original_registry = dict(env_module._ENV_REGISTRY)
+    calls: list[tuple[str, int, dict]] = []
+
+    def _unexpected_gymnax(_name: str):
+        raise AssertionError("Gymnax fallback should not be used for registered prefixes")
+
+    monkeypatch.setattr(env_module, "make_gymnax_env", _unexpected_gymnax)
+
+    try:
+        @env_module.register_env("rlpallet")
+        def _dummy_rlpallet_factory(env_name: str, num_envs_per_device: int, env_kwargs: dict):
+            calls.append((env_name, num_envs_per_device, dict(env_kwargs)))
+            return {"backend": "rlpallet"}, None
+
+        env_module.make_stoa_env(
+            "rlpallet:OtherEnv-v1",
+            1,
+            env_kwargs={
+                "target_groups": 7,
+                "max_mult": 4,
+                "max_items": 999,
+                "max_episode_steps": 999,
+            },
+        )
+
+        assert calls == [
+            (
+                "rlpallet:OtherEnv-v1",
+                1,
+                {
+                    "target_groups": 7,
+                    "max_mult": 4,
+                    "max_items": 999,
+                    "max_episode_steps": 999,
+                },
+            )
+        ]
+    finally:
+        env_module._ENV_REGISTRY.clear()
+        env_module._ENV_REGISTRY.update(original_registry)

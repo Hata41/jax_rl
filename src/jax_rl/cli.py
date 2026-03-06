@@ -1,12 +1,22 @@
 from pathlib import Path
 import time
 from typing import Any
+from dataclasses import asdict
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
-from .configs.config import ExperimentConfig, register_configs
+from .configs.config import (
+    ArchConfig,
+    CheckpointConfig,
+    EnvConfig,
+    ExperimentConfig,
+    LoggingConfig,
+    SystemConfig,
+    register_configs,
+)
+from .configs.evaluations import resolve_eval_env
 from .utils.runtime import configure_jax_runtime_defaults
 
 configure_jax_runtime_defaults()
@@ -69,7 +79,7 @@ def inject_run_id(
     return config, run_id
 
 
-@hydra.main(version_base=None, config_path=_CONFIG_DIR, config_name="ppo/train_binpack")
+@hydra.main(version_base=None, config_path=_CONFIG_DIR, config_name="binpack/ppo")
 def main(cfg: DictConfig) -> None:
     arch_cfg = cfg.get("arch") or {}
     platform = arch_cfg.get("platform") if hasattr(arch_cfg, "get") else None
@@ -85,6 +95,40 @@ def main(cfg: DictConfig) -> None:
 
     typed = OmegaConf.to_object(cfg)
 
+    def _coerce_experiment_config(mapping: dict[str, Any]) -> ExperimentConfig:
+        payload = dict(mapping)
+
+        env_value = payload.get("env")
+        if isinstance(env_value, dict):
+            payload["env"] = EnvConfig(**env_value)
+
+        arch_value = payload.get("arch")
+        if isinstance(arch_value, dict):
+            payload["arch"] = ArchConfig(**arch_value)
+
+        system_value = payload.get("system")
+        if isinstance(system_value, dict):
+            payload["system"] = SystemConfig(**system_value)
+
+        checkpoint_value = payload.get("checkpointing")
+        if isinstance(checkpoint_value, dict):
+            payload["checkpointing"] = CheckpointConfig(**checkpoint_value)
+
+        logging_value = payload.get("logging")
+        if isinstance(logging_value, dict):
+            payload["logging"] = LoggingConfig(**logging_value)
+
+        return ExperimentConfig(**payload)
+    expected_keys = {
+        "env",
+        "arch",
+        "system",
+        "checkpointing",
+        "logging",
+        "network",
+        "evaluations",
+    }
+
     if isinstance(typed, ExperimentConfig):
         config = typed
     elif isinstance(typed, dict):
@@ -92,14 +136,34 @@ def main(cfg: DictConfig) -> None:
             only_value = next(iter(typed.values()))
             if isinstance(only_value, ExperimentConfig):
                 config = only_value
+            elif isinstance(only_value, dict):
+                config = _coerce_experiment_config({str(k): v for k, v in only_value.items()})
             else:
-                typed_config: dict[str, Any] = {
-                    str(key): value for key, value in typed.items()
-                }
-                config = ExperimentConfig(**typed_config)
+                typed_config: dict[str, Any] = {str(key): value for key, value in typed.items()}
+                config = _coerce_experiment_config(typed_config)
         else:
-            typed_config: dict[str, Any] = {str(key): value for key, value in typed.items()}
-            config = ExperimentConfig(**typed_config)
+            wrapper_config: ExperimentConfig | None = None
+            for root_key in ("uldenv", "binpack", "jaxpallet"):
+                if root_key not in typed:
+                    continue
+                root_value = typed[root_key]
+                if isinstance(root_value, ExperimentConfig):
+                    merged = asdict(root_value)
+                elif isinstance(root_value, dict):
+                    merged = {str(k): v for k, v in root_value.items()}
+                else:
+                    continue
+                for key in expected_keys:
+                    if key in typed:
+                        merged[key] = typed[key]
+                wrapper_config = _coerce_experiment_config(merged)
+                break
+
+            if wrapper_config is not None:
+                config = wrapper_config
+            else:
+                typed_config = {str(key): value for key, value in typed.items() if str(key) in expected_keys}
+                config = _coerce_experiment_config(typed_config)
     else:
         raise TypeError(
             f"Hydra config did not resolve to ExperimentConfig. Got: {type(typed)}"
@@ -137,7 +201,11 @@ def main(cfg: DictConfig) -> None:
         num_episodes = int(eval_cfg.get("num_episodes", 10))
         if num_episodes <= 0:
             continue
-        env_name = str(eval_cfg.get("env_name", config.env.env_name))
+        env_name, env_kwargs = resolve_eval_env(
+            eval_cfg,
+            default_env_name=config.env.env_name,
+            default_env_kwargs=config.env.env_kwargs,
+        )
         if system_name == "alphazero":
             from .systems.alphazero.eval import evaluate as alphazero_evaluate
 
@@ -149,7 +217,7 @@ def main(cfg: DictConfig) -> None:
                 num_episodes=num_episodes,
                 max_steps_per_episode=int(eval_cfg.get("max_steps_per_episode", 1_000)),
                 greedy=bool(eval_cfg.get("greedy", True)),
-                env_kwargs=dict(eval_cfg.get("env_kwargs", config.env.env_kwargs)),
+                env_kwargs=env_kwargs,
                 action_selection=str(eval_cfg.get("action_selection", "policy")),
             )
         elif system_name == "spo":
@@ -163,7 +231,7 @@ def main(cfg: DictConfig) -> None:
                 num_episodes=num_episodes,
                 max_steps_per_episode=int(eval_cfg.get("max_steps_per_episode", 1_000)),
                 greedy=bool(eval_cfg.get("greedy", True)),
-                env_kwargs=dict(eval_cfg.get("env_kwargs", config.env.env_kwargs)),
+                env_kwargs=env_kwargs,
                 action_selection=str(eval_cfg.get("action_selection", "policy")),
             )
         else:
@@ -174,7 +242,7 @@ def main(cfg: DictConfig) -> None:
                 num_episodes=num_episodes,
                 max_steps_per_episode=int(eval_cfg.get("max_steps_per_episode", 1_000)),
                 greedy=bool(eval_cfg.get("greedy", True)),
-                env_kwargs=dict(eval_cfg.get("env_kwargs", config.env.env_kwargs)),
+                env_kwargs=env_kwargs,
             )
         eval_str = " ".join(
             f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"

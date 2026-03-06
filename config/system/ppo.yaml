@@ -1,0 +1,16 @@
+name: ppo
+
+actor_lr: 0.0003
+critic_lr: 0.0003
+optimizer: adam
+lr_schedule: linear
+gamma: 0.99
+gae_lambda: 0.95
+
+clip_epsilon: 0.2
+value_coef: 0.5
+entropy_coef: 0.01
+
+update_epochs: 1
+minibatch_size: 64
+max_grad_norm: 0.5
