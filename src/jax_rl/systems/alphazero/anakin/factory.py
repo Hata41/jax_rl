@@ -6,6 +6,8 @@ from typing import Any, NamedTuple, cast
 
 import jax
 import jax.numpy as jnp
+from optax import GradientTransformation
+from stoa.environment import Environment
 
 from ....configs.config import ExperimentConfig
 from ....envs.env import make_stoa_env
@@ -13,16 +15,17 @@ from ....networks import init_policy_value_params
 from ....systems.ppo.update import make_actor_optimizer, make_critic_optimizer
 from ....utils.checkpoint import Checkpointer
 from ....utils.exceptions import ConfigDivisibilityError, SearchTreeCapacityError
+from ....utils.jax_utils import normalize_restored_train_state_and_key, replicate_tree
 from ....utils.shapes import space_feature_dim, space_flat_dim
 from ....utils.types import TrainState
 from ..search_types import ExItTransition
 
 
 class AlphaZeroComponents(NamedTuple):
-    env: Any
+    env: Environment
     env_params: Any
-    actor_optimizer: Any
-    critic_optimizer: Any
+    actor_optimizer: GradientTransformation
+    critic_optimizer: GradientTransformation
     checkpointer: Checkpointer
     runner_state: Any
     num_devices: int
@@ -31,12 +34,6 @@ class AlphaZeroComponents(NamedTuple):
     num_actions: int
     buffer_add_fn: Any
     buffer_sample_fn: Any
-
-
-def _replicate_tree(tree, num_devices: int):
-    from flax.jax_utils import replicate
-    return replicate(tree)
-
 
 def _infer_action_dims(action_space) -> int | tuple[int, ...]:
     if isinstance(action_space, tuple) and len(action_space) == 1:
@@ -144,6 +141,19 @@ def build_system(config: ExperimentConfig, runner_state_cls: type):
         metadata={"config": asdict(config)},
     )
 
+    if config.checkpointing.resume_from:
+        payload = checkpointer.restore(
+            checkpoint_path=config.checkpointing.resume_from,
+            template_train_state=train_state,
+            template_key=key,
+        )
+        train_state, restored_key = normalize_restored_train_state_and_key(
+            payload["train_state"],
+            payload["key"],
+        )
+        if restored_key is not None:
+            key = restored_key
+
     fbx = importlib.import_module("flashbax")
     key, buffer_reset_key = jax.random.split(key)
     _, buffer_init_timestep = env.reset(buffer_reset_key, cast(Any, env_params))
@@ -164,8 +174,8 @@ def build_system(config: ExperimentConfig, runner_state_cls: type):
     )
     buffer_state = buffer.init(dummy_transition)
 
-    replicated_train_state = _replicate_tree(train_state, num_devices)
-    replicated_buffer_state = _replicate_tree(buffer_state, num_devices)
+    replicated_train_state = replicate_tree(train_state)
+    replicated_buffer_state = replicate_tree(buffer_state)
 
     key, runner_seed_key = jax.random.split(key)
     keys = jax.random.split(runner_seed_key, num_devices)

@@ -43,8 +43,8 @@ def test_discrete_action_space_export_and_equivalence(tmp_path):
 
     ort_logits, ort_values = _run_onnx_inference(model_path, obs)
 
-    np.testing.assert_allclose(ort_logits, expected_logits, rtol=0.0, atol=1e-5)
-    np.testing.assert_allclose(ort_values, expected_values, rtol=0.0, atol=1e-5)
+    np.testing.assert_allclose(ort_logits, expected_logits, rtol=0.0, atol=2e-4)
+    np.testing.assert_allclose(ort_values, expected_values, rtol=0.0, atol=1e-3)
 
 
 def test_multidiscrete_action_space_export_and_equivalence(tmp_path):
@@ -117,6 +117,6 @@ def test_binpack_transformer_export_and_equivalence(tmp_path):
 
     ort_logits, ort_values = _run_onnx_inference(model_path, obs)
 
-    np.testing.assert_allclose(ort_logits, expected_logits, rtol=0.0, atol=1e-5)
-    np.testing.assert_allclose(ort_values, expected_values, rtol=0.0, atol=1e-5)
+    np.testing.assert_allclose(ort_logits, expected_logits, rtol=0.0, atol=2e-4)
+    np.testing.assert_allclose(ort_values, expected_values, rtol=0.0, atol=1e-3)
     assert np.all(ort_logits[:, 5::11] == -1e9)

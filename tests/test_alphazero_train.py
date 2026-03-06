@@ -12,9 +12,14 @@ class _RunnerState:
         self.obs = jnp.zeros((1,), dtype=jnp.float32)
 
 
-class _Traj:
+class _RolloutMetrics:
     def __init__(self, finite: bool):
-        self.info = {"search_finite": jnp.asarray([finite], dtype=jnp.bool_)}
+        self.search_finite = jnp.asarray([finite], dtype=jnp.bool_)
+
+
+def _rollout_output(finite: bool):
+    rollout_metrics = {"search_finite": _RolloutMetrics(finite).search_finite}
+    return object(), rollout_metrics
 
 
 def test_run_warmup_rollouts_uses_ceiling_cycles():
@@ -26,7 +31,7 @@ def test_run_warmup_rollouts_uses_ceiling_cycles():
 
     def _pmap_rollout(runner_state):
         calls["count"] += 1
-        return runner_state, _Traj(True)
+        return runner_state, _rollout_output(True)
 
     runner_state = _RunnerState()
     az_system._run_warmup_rollouts(config, _pmap_rollout, runner_state)
@@ -40,7 +45,7 @@ def test_run_warmup_rollouts_raises_on_non_finite_search():
     config.system.num_steps = 4
 
     def _pmap_rollout(runner_state):
-        return runner_state, _Traj(False)
+        return runner_state, _rollout_output(False)
 
     with pytest.raises(NumericalInstabilityError):
         az_system._run_warmup_rollouts(config, _pmap_rollout, _RunnerState())

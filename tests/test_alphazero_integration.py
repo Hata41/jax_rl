@@ -210,4 +210,4 @@ def test_alphazero_memory_cleanup_called():
     assert len(env.calls) == 1
     _, released_ids = env.calls[0]
     assert released_ids.dtype == jnp.int32
-    assert released_ids.tolist() == [11, 12, 13]
+    assert released_ids.tolist() == [11, 12, -1, -1, 13, -1]

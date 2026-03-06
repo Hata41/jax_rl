@@ -10,16 +10,10 @@ from ....envs.env import make_stoa_env
 from ....networks import init_policy_value_params
 from ....utils.checkpoint import Checkpointer
 from ....utils.exceptions import ConfigDivisibilityError
+from ....utils.jax_utils import normalize_restored_train_state_and_key, replicate_tree
 from ....utils.shapes import space_feature_dim, space_flat_dim
 from ....utils.types import RunnerState, SystemComponents, TrainState
 from ..update import make_actor_optimizer, make_critic_optimizer
-
-
-def _replicate_tree(tree, num_devices: int):
-    from flax.jax_utils import replicate
-    return replicate(tree)
-
-
 def _infer_action_dims(action_space) -> int | tuple[int, ...]:
     if isinstance(action_space, tuple) and len(action_space) == 1:
         return int(action_space[0])
@@ -112,10 +106,13 @@ def _init_train_state(
             template_train_state=initial_train_state,
             template_key=key,
         )
-        train_state = payload["train_state"]
+        train_state, restored_key = normalize_restored_train_state_and_key(
+            payload["train_state"],
+            payload["key"],
+        )
         start_update = int(payload["step"])
-        if payload["key"] is not None:
-            key = payload["key"]
+        if restored_key is not None:
+            key = restored_key
     else:
         train_state = initial_train_state
 
@@ -125,7 +122,7 @@ def _init_train_state(
             f"got checkpoint={start_update}, target={config.num_updates}."
         )
 
-    train_state = _replicate_tree(train_state, num_devices)
+    train_state = replicate_tree(train_state)
     return train_state, actor_optimizer, critic_optimizer, checkpointer, start_update, key
 
 

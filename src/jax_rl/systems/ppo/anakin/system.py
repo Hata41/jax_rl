@@ -3,16 +3,13 @@ import time
 import jax
 
 from ....configs.config import ExperimentConfig
+from ....utils.jax_utils import unreplicate_tree
 from ....utils.logging import extract_completed_episode_metrics, extract_learning_rate, jaxRL_Logger
 from ....utils.runtime import PhaseTimer
 from ....utils.types import LogEvent
 from ..eval import EvaluationManager, Evaluator
 from .factory import build_system
 from .steps import make_ppo_steps
-
-
-def _unreplicate(tree):
-    return jax.tree_util.tree_map(lambda x: x[0], tree)
 
 
 def train(config: ExperimentConfig):
@@ -59,7 +56,7 @@ def train(config: ExperimentConfig):
             "metrics": {},
             "checkpoint_path": None,
             "tensorboard_run_dir": tensorboard_run_dir,
-            "params": _unreplicate(runner_state.train_state.params),
+            "params": unreplicate_tree(runner_state.train_state.params),
         }
 
     evaluation_manager = EvaluationManager(
@@ -79,8 +76,8 @@ def train(config: ExperimentConfig):
                 runner_state, rollout_outputs = pmap_rollout(runner_state)
                 jax.block_until_ready(runner_state.obs)
             rollout_batch, last_values, rollout_infos, rollout_metrics = rollout_outputs
-            rollout_metrics = _unreplicate(rollout_metrics)
-            rollout_infos = _unreplicate(rollout_infos)
+            rollout_metrics = unreplicate_tree(rollout_metrics)
+            rollout_infos = unreplicate_tree(rollout_infos)
 
             act_metrics = dict(rollout_metrics)
             act_metrics["steps_per_second"] = timer.steps_per_second(
@@ -92,14 +89,14 @@ def train(config: ExperimentConfig):
             with timer.phase("train"):
                 runner_state, train_metrics = pmap_update(runner_state, rollout_batch, last_values)
                 jax.block_until_ready(runner_state.obs)
-            train_metrics = _unreplicate(train_metrics)
+            train_metrics = unreplicate_tree(train_metrics)
 
             train_metrics = dict(train_metrics)
             train_metrics["steps_per_second"] = timer.steps_per_second(
                 "train",
                 config.system.update_epochs * num_minibatches,
             )
-            actor_opt_state = _unreplicate(runner_state.train_state.actor_opt_state)
+            actor_opt_state = unreplicate_tree(runner_state.train_state.actor_opt_state)
             train_metrics["learning_rate"] = extract_learning_rate(actor_opt_state)
 
             log_step = (global_update_idx + 1) * config.rollout_batch_size
@@ -129,8 +126,8 @@ def train(config: ExperimentConfig):
                 (global_update_idx + 1) % config.checkpointing.save_interval_steps == 0
                 or local_update_idx == remaining_updates - 1
             ):
-                train_state_to_save = _unreplicate(runner_state.train_state)
-                key_to_save = _unreplicate(runner_state.key)
+                train_state_to_save = unreplicate_tree(runner_state.train_state)
+                key_to_save = unreplicate_tree(runner_state.key)
                 eval_return_values = [
                     float(value)
                     for key, value in eval_metrics.items()
@@ -156,5 +153,5 @@ def train(config: ExperimentConfig):
         "metrics": latest_metrics if latest_metrics else {},
         "checkpoint_path": latest_checkpoint,
         "tensorboard_run_dir": tensorboard_run_dir,
-        "params": _unreplicate(runner_state.train_state.params),
+        "params": unreplicate_tree(runner_state.train_state.params),
     }

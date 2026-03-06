@@ -5,9 +5,12 @@ from typing import Any, NamedTuple, cast
 import jax
 import jax.numpy as jnp
 import optax
+from optax import GradientTransformation
+from stoa.environment import Environment
 
 from ....configs.config import ExperimentConfig
 from ....networks import policy_value_apply
+from ....systems.ppo.advantages import compute_gae
 from ....systems.ppo.update import _zero_out_except_module
 from ....utils.exceptions import EnvironmentInterfaceError, NumericalInstabilityError
 from ....utils.types import TrainState
@@ -41,39 +44,6 @@ def _distribution_logits(dist: Any) -> jax.Array:
     raise TypeError("Policy distribution must expose 'logits' or 'logits_per_dim'.")
 
 
-def _compute_value_targets(
-    reward: jax.Array,
-    done: jax.Array,
-    search_value: jax.Array,
-    gamma: float,
-    gae_lambda: float,
-) -> jax.Array:
-    reward = jnp.asarray(reward, dtype=jnp.float32)
-    done = jnp.asarray(done, dtype=jnp.float32)
-    search_value = jnp.asarray(search_value, dtype=jnp.float32)
-
-    seq_len = reward.shape[1]
-    if seq_len <= 1:
-        return search_value
-
-    discounts = (1.0 - done[:, :-1]) * float(gamma)
-    deltas = reward[:, :-1] + discounts * search_value[:, 1:] - search_value[:, :-1]
-
-    def _scan_adv(next_adv, elems):
-        delta_t, discount_t = elems
-        adv_t = delta_t + discount_t * float(gae_lambda) * next_adv
-        return adv_t, adv_t
-
-    init_adv = jnp.zeros_like(deltas[:, -1])
-    _, reversed_adv = jax.lax.scan(
-        _scan_adv,
-        init_adv,
-        (jnp.swapaxes(deltas, 0, 1)[::-1], jnp.swapaxes(discounts, 0, 1)[::-1]),
-    )
-    adv = jnp.swapaxes(reversed_adv[::-1], 0, 1)
-    return adv + search_value[:, :-1]
-
-
 def _flatten_batch_time(x: jax.Array) -> jax.Array:
     x = jnp.asarray(x)
     if x.ndim < 2:
@@ -94,14 +64,20 @@ def _loss_and_grads(train_state: TrainState, sequence: Any, config: ExperimentCo
     else:
         obs = jax.tree_util.tree_map(lambda x: _flatten_batch_time(jnp.asarray(x)[:, :-1]), sequence.obs)
         target_policy = _flatten_batch_time(search_policy[:, :-1])
-        target_value = jnp.reshape(
-            _compute_value_targets(
-                reward=reward,
-                done=done,
-                search_value=search_value,
+        _, target_value_returns = jax.vmap(
+            lambda reward_row, done_row, value_row: compute_gae(
+                rewards=reward_row[:-1],
+                dones=done_row[:-1],
+                truncated=jnp.zeros_like(done_row[:-1]),
+                values=value_row[:-1],
+                last_values=value_row[-1],
                 gamma=float(config.system.gamma),
                 gae_lambda=float(config.system.gae_lambda),
             ),
+            in_axes=(0, 0, 0),
+        )(reward, done, search_value)
+        target_value = jnp.reshape(
+            target_value_returns,
             (-1,),
         )
 
@@ -134,10 +110,10 @@ def _loss_and_grads(train_state: TrainState, sequence: Any, config: ExperimentCo
 
 def make_alphazero_steps(
     config: ExperimentConfig,
-    env: Any,
+    env: Environment,
     env_params: Any,
-    actor_optimizer: Any,
-    critic_optimizer: Any,
+    actor_optimizer: GradientTransformation,
+    critic_optimizer: GradientTransformation,
     is_rustpool: bool,
     num_envs_per_device: int,
     buffer_add_fn: Any,
@@ -186,7 +162,10 @@ def make_alphazero_steps(
             extras = timestep.extras if isinstance(timestep.extras, dict) else {}
             info = extras.get("episode_metrics", {}) if isinstance(extras, dict) else {}
             info_dict: dict[str, Any] = cast(dict[str, Any], info if isinstance(info, dict) else {})
-            search_value = jnp.asarray(search_output.search_tree.node_values[:, 0], dtype=jnp.float32)
+            node_values = jnp.atleast_2d(
+                jnp.asarray(search_output.search_tree.node_values, dtype=jnp.float32)
+            )
+            search_value = node_values[:, 0]
 
             transition = ExItTransition(
                 done=done,
@@ -233,9 +212,13 @@ def make_alphazero_steps(
             obs=next_obs,
             key=next_key,
         )
-        return next_state, traj
+        rollout_metrics = {
+            "search_finite": jnp.all(jnp.asarray(transitions.info["search_finite"], dtype=jnp.bool_))
+        }
+        return next_state, (traj, rollout_metrics)
 
-    def update_step(state: AlphaZeroRunnerState, traj):
+    def update_step(state: AlphaZeroRunnerState, rollout_outputs):
+        traj, rollout_metrics = rollout_outputs
         buffer_state = buffer_add_fn(state.buffer_state, traj)
 
         def _update_once(carry, _):
@@ -282,6 +265,8 @@ def make_alphazero_steps(
             length=max(int(config.system.learner_updates_per_cycle), 1),
         )
         train_metrics = jax.tree_util.tree_map(jnp.mean, metrics)
+        train_metrics = dict(train_metrics)
+        train_metrics["search_finite"] = jnp.asarray(rollout_metrics["search_finite"], dtype=jnp.bool_)
 
         next_state = AlphaZeroRunnerState(
             train_state=next_train_state,

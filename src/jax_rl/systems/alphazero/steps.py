@@ -1,36 +1,14 @@
 from __future__ import annotations
 
-import importlib
 from typing import Any, Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import mctx
 
 from ...networks import policy_value_apply
 from ...utils.exceptions import EnvironmentInterfaceError, NumericalInstabilityError
-
-
-class _FallbackRootFnOutput(NamedTuple):
-    prior_logits: jax.Array
-    value: jax.Array
-    embedding: Any
-
-
-class _FallbackRecurrentFnOutput(NamedTuple):
-    reward: jax.Array
-    discount: jax.Array
-    prior_logits: jax.Array
-    value: jax.Array
-
-
-def _mctx_outputs():
-    try:
-        mctx = importlib.import_module("mctx")
-
-        return mctx.RootFnOutput, mctx.RecurrentFnOutput
-    except Exception:
-        return _FallbackRootFnOutput, _FallbackRecurrentFnOutput
 
 
 def _distribution_logits(dist: Any) -> jax.Array:
@@ -43,12 +21,10 @@ def _distribution_logits(dist: Any) -> jax.Array:
 
 
 def make_root_fn() -> Callable[[Any, Any, Any, jax.Array], Any]:
-    root_output_cls, _ = _mctx_outputs()
-
     def root_fn(params, observation, state_embedding, _):
         dist, value = policy_value_apply(params.graphdef, params.state, observation)
         logits = _distribution_logits(dist)
-        return root_output_cls(
+        return mctx.RootFnOutput(
             prior_logits=logits,
             value=jnp.asarray(value, dtype=jnp.float32),
             embedding=state_embedding,
@@ -64,8 +40,6 @@ def make_recurrent_fn(
     gamma: float,
     is_rustpool: bool,
 ) -> Callable[[Any, jax.Array, jax.Array, Any], tuple[Any, Any]]:
-    _, recurrent_output_cls = _mctx_outputs()
-
     gamma_value = jnp.asarray(gamma, dtype=jnp.float32)
     is_vectorized_env = hasattr(env, "_vmap_step") or type(env).__name__ == "VmapWrapper"
 
@@ -88,7 +62,7 @@ def make_recurrent_fn(
             )
             logits = _distribution_logits(dist)
             timestep_discount = jnp.asarray(next_timestep.discount, dtype=jnp.float32)
-            recurrent_output = recurrent_output_cls(
+            recurrent_output = mctx.RecurrentFnOutput(
                 reward=jnp.asarray(next_timestep.reward, dtype=jnp.float32),
                 discount=timestep_discount * gamma_value,
                 prior_logits=logits,
@@ -113,7 +87,7 @@ def make_recurrent_fn(
         )
         logits = _distribution_logits(dist)
         timestep_discount = jnp.asarray(next_timestep.discount, dtype=jnp.float32)
-        recurrent_output = recurrent_output_cls(
+        recurrent_output = mctx.RecurrentFnOutput(
             reward=jnp.asarray(next_timestep.reward, dtype=jnp.float32),
             discount=timestep_discount * gamma_value,
             prior_logits=logits,
@@ -125,8 +99,6 @@ def make_recurrent_fn(
 
 
 def parse_search_method(name: str):
-    mctx = importlib.import_module("mctx")
-
     normalized = str(name).lower()
     if normalized == "muzero":
         return mctx.muzero_policy

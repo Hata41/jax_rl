@@ -11,6 +11,7 @@ import pytest
 from jax_rl.configs.config import ExperimentConfig, SystemConfig
 from jax_rl.systems.ppo.anakin.system import train
 from jax_rl.utils.exceptions import ConfigDivisibilityError
+from jax_rl.utils.jax_utils import replicate_tree, unreplicate_tree
 from jax_rl.utils.types import TrainState
 
 train_module = importlib.import_module("jax_rl.systems.ppo.anakin.system")
@@ -18,7 +19,7 @@ train_module = importlib.import_module("jax_rl.systems.ppo.anakin.system")
 def test_train_raises_when_num_envs_not_divisible_by_device_count(monkeypatch):
     monkeypatch.setattr(train_module.jax, "local_device_count", lambda: 4)
 
-    config = ExperimentConfig(system=SystemConfig(num_envs=6))
+    config = ExperimentConfig(system=SystemConfig(num_envs=6, minibatch_size=150))
     with pytest.raises(ConfigDivisibilityError, match="num_envs must be divisible"):
         train(config)
 
@@ -72,3 +73,29 @@ def test_pmean_synchronizes_replicas_across_devices():
     next_state = pmap_update(replicated_state, per_device_rollout_data)
 
     assert jnp.array_equal(next_state.params["actor"]["w"][0], next_state.params["actor"]["w"][1])
+
+
+def test_replicate_unreplicate_tree_roundtrip_nested_pytree():
+    pytree = {
+        "a": jnp.arange(6, dtype=jnp.float32).reshape(2, 3),
+        "b": (
+            jnp.array([1, 2, 3], dtype=jnp.int32),
+            {"c": jnp.array([True, False, True], dtype=jnp.bool_)},
+        ),
+    }
+
+    replicated = replicate_tree(pytree)
+    num_devices = jax.local_device_count()
+
+    replicated_leaves = jax.tree_util.tree_leaves(replicated)
+    assert replicated_leaves
+    assert all(leaf.shape[0] == num_devices for leaf in replicated_leaves)
+
+    restored = unreplicate_tree(replicated)
+    restored_leaves = jax.tree_util.tree_leaves(restored)
+    original_leaves = jax.tree_util.tree_leaves(pytree)
+
+    assert len(restored_leaves) == len(original_leaves)
+    for restored_leaf, original_leaf in zip(restored_leaves, original_leaves):
+        assert restored_leaf.shape == original_leaf.shape
+        assert jnp.array_equal(restored_leaf, original_leaf)

@@ -7,18 +7,13 @@ import jax.numpy as jnp
 
 from ....configs.config import ExperimentConfig
 from ....utils.exceptions import NumericalInstabilityError
+from ....utils.jax_utils import unreplicate_tree
 from ....utils.logging import extract_learning_rate, jaxRL_Logger
 from ....utils.runtime import PhaseTimer
 from ....utils.types import LogEvent
 from ..eval import EvaluationManager
 from .factory import build_system
 from .steps import AlphaZeroRunnerState, make_alphazero_steps
-
-
-def _unreplicate(tree):
-    return jax.tree_util.tree_map(lambda x: x[0], tree)
-
-
 def _run_warmup_rollouts(config: ExperimentConfig, pmap_rollout, runner_state):
     warmup_steps = max(int(getattr(config.system, "warmup_steps", 0)), 0)
     if warmup_steps == 0:
@@ -28,10 +23,9 @@ def _run_warmup_rollouts(config: ExperimentConfig, pmap_rollout, runner_state):
     warmup_rollouts = (warmup_steps + rollout_len - 1) // rollout_len
 
     for _ in range(warmup_rollouts):
-        runner_state, traj = pmap_rollout(runner_state)
-        jax.block_until_ready(runner_state.obs)
-        search_finite = traj.info["search_finite"]
-        if not bool(jnp.all(search_finite)):
+        runner_state, (_, rollout_metrics) = pmap_rollout(runner_state)
+        rollout_metrics = dict(unreplicate_tree(rollout_metrics))
+        if not bool(jnp.all(rollout_metrics.get("search_finite", jnp.asarray(True, dtype=jnp.bool_)))):
             raise NumericalInstabilityError(
                 "AlphaZero warmup search produced non-finite action weights or values."
             )
@@ -77,29 +71,31 @@ def train(config: ExperimentConfig):
         for update_idx in range(config.num_updates):
             timer = PhaseTimer(now_fn=time.time)
             with timer.phase("act"):
-                runner_state, traj = pmap_rollout(runner_state)
-                jax.block_until_ready(runner_state.obs)
-
-            search_finite = traj.info["search_finite"]
-            if not bool(jnp.all(search_finite)):
+                runner_state, rollout_outputs = pmap_rollout(runner_state)
+            traj, rollout_metrics = rollout_outputs
+            rollout_metrics = dict(unreplicate_tree(rollout_metrics))
+            if not bool(jnp.all(rollout_metrics.get("search_finite", jnp.asarray(True, dtype=jnp.bool_)))):
                 raise NumericalInstabilityError(
                     "AlphaZero search produced non-finite action weights or values."
                 )
 
             with timer.phase("train"):
-                runner_state, train_metrics = pmap_update(runner_state, traj)
-                jax.block_until_ready(runner_state.obs)
+                runner_state, train_metrics = pmap_update(runner_state, rollout_outputs)
 
-            train_metrics = _unreplicate(train_metrics)
+            train_metrics = dict(unreplicate_tree(train_metrics))
             loss_is_finite = train_metrics.get("loss_is_finite", jnp.asarray(True, dtype=jnp.bool_))
+            search_finite = train_metrics.get("search_finite", jnp.asarray(True, dtype=jnp.bool_))
             if not bool(jnp.all(loss_is_finite)):
                 raise NumericalInstabilityError("AlphaZero update produced non-finite total loss.")
-            train_metrics = dict(train_metrics)
+            if not bool(jnp.all(search_finite)):
+                raise NumericalInstabilityError(
+                    "AlphaZero search produced non-finite action weights or values."
+                )
             train_metrics["steps_per_second"] = timer.steps_per_second(
                 "train",
                 max(config.system.learner_updates_per_cycle, 1),
             )
-            actor_opt_state = _unreplicate(runner_state.train_state.actor_opt_state)
+            actor_opt_state = unreplicate_tree(runner_state.train_state.actor_opt_state)
             train_metrics["learning_rate"] = extract_learning_rate(actor_opt_state)
 
             log_step = (update_idx + 1) * config.rollout_batch_size
@@ -129,8 +125,8 @@ def train(config: ExperimentConfig):
                 (update_idx + 1) % config.checkpointing.save_interval_steps == 0
                 or update_idx == config.num_updates - 1
             ):
-                train_state_to_save = _unreplicate(runner_state.train_state)
-                key_to_save = _unreplicate(runner_state.key)
+                train_state_to_save = unreplicate_tree(runner_state.train_state)
+                key_to_save = unreplicate_tree(runner_state.key)
                 eval_return_values = [
                     float(value)
                     for key, value in (eval_metrics or {}).items()
@@ -160,5 +156,5 @@ def train(config: ExperimentConfig):
         "metrics": latest_metrics,
         "checkpoint_path": latest_checkpoint,
         "tensorboard_run_dir": tensorboard_run_dir,
-        "params": _unreplicate(runner_state.train_state.params),
+        "params": unreplicate_tree(runner_state.train_state.params),
     }

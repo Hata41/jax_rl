@@ -9,6 +9,7 @@ from ...configs.config import ExperimentConfig
 from ...envs.env import make_stoa_env
 from ...networks import policy_value_apply
 from ...utils.exceptions import ConfigDivisibilityError, NumericalInstabilityError
+from ...utils.jax_utils import replicate_tree
 from ...utils.runtime import PhaseTimer
 from ...utils.types import PolicyValueParams
 from .steps import (
@@ -30,13 +31,6 @@ def _zero_metrics() -> dict[str, float | int]:
         "episodes": 0,
         "steps": 0,
     }
-
-
-def _replicate_tree(tree, num_devices: int):
-    from flax.jax_utils import replicate
-    return replicate(tree)
-
-
 def _is_replicated_state(state, num_devices: int) -> bool:
     leaves = jax.tree_util.tree_leaves(state)
     if not leaves:
@@ -387,7 +381,7 @@ def evaluate(
         else:
             replicated_params = PolicyValueParams(
                 graphdef=params.graphdef,
-                state=_replicate_tree(params.state, evaluator.num_devices),
+                state=replicate_tree(params.state),
             )
         return evaluator.run(replicated_params=replicated_params, seed=seed)
     finally:
