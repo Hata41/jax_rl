@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 from colorama import Fore
 
-from jax_rl.configs.config import ExperimentConfig, LoggingConfig
+from jax_rl.configs.config import ExperimentConfig, IOConfig, LoggingConfig
 from jax_rl.utils.logging import (
     BaseLogger,
     ConsoleLogger,
@@ -125,7 +125,7 @@ def test_jaxrl_logger_dispatches_to_all_sinks():
 
 
 def test_logger_config_toggle_disables_tensorboard_sink():
-    config = ExperimentConfig(logging=LoggingConfig(tensorboard_logdir=None))
+    config = ExperimentConfig(io=IOConfig(logger=LoggingConfig(tensorboard_logdir=None)))
     logger = jaxRL_Logger.from_config(config)
 
     sink_names = {type(sink).__name__ for sink in logger.sinks}

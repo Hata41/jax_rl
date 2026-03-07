@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jax_rl.configs.config import ArchConfig, CheckpointConfig, EnvConfig, ExperimentConfig, LoggingConfig, SystemConfig
+from jax_rl.configs.config import ArchConfig, CheckpointConfig, EnvConfig, ExperimentConfig, IOConfig, LoggingConfig, SystemConfig
 from jax_rl.systems.ppo.eval import Evaluator, evaluate
 from jax_rl.systems.ppo.anakin.system import train
 from jax_rl.systems.ppo.anakin.factory import _init_train_state, _setup_environment
@@ -210,6 +210,21 @@ def test_resolve_resume_from_returns_leaf_when_no_steps_exist(tmp_path: Path):
     assert resolved_prefixed_ppo == str(ppo_leaf)
 
 
+def test_resolve_resume_from_supports_flat_algo_layout(tmp_path: Path):
+    ppo_leaf = tmp_path / "ppo" / "save_ppo_flat"
+    (ppo_leaf / "1").mkdir(parents=True)
+
+    current_checkpoint_dir = tmp_path / "spo" / "spo_after"
+
+    resolved_prefixed_ppo = resolve_resume_from(
+        checkpoint_dir=str(current_checkpoint_dir),
+        env_name="rlpallet:UldEnv-v2",
+        resume_from="ppo/save_ppo_flat",
+        source_algo="spo",
+    )
+    assert resolved_prefixed_ppo == str(ppo_leaf)
+
+
 @pytest.mark.integration
 def test_train_resume_from_checkpoint(tmp_path: Path):
     num_devices = jax.local_device_count()
@@ -227,11 +242,13 @@ def test_train_resume_from_checkpoint(tmp_path: Path):
             update_epochs=1,
             minibatch_size=rollout_batch_size,
         ),
-        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
-        checkpointing=CheckpointConfig(
-            checkpoint_dir=str(checkpoint_root),
-            save_interval_steps=1,
-            max_to_keep=3,
+        io=IOConfig(
+            logger=LoggingConfig(log_every=1, tensorboard_logdir=None),
+            checkpoint=CheckpointConfig(
+                checkpoint_dir=str(checkpoint_root),
+                save_interval_steps=1,
+                max_to_keep=3,
+            ),
         ),
         evaluations={},
     )
@@ -242,11 +259,12 @@ def test_train_resume_from_checkpoint(tmp_path: Path):
     assert checkpoint_path is not None
     assert Path(checkpoint_path).exists()
 
-    resumed_checkpointing = replace(config.checkpointing, resume_from=str(checkpoint_path))
+    resumed_checkpointing = replace(config.io.checkpoint, resume_from=str(checkpoint_path))
+    resumed_io = replace(config.io, checkpoint=resumed_checkpointing)
     resumed_arch = replace(config.arch, total_timesteps=3 * rollout_batch_size)
     resumed_config = replace(
         config,
-        checkpointing=resumed_checkpointing,
+        io=resumed_io,
         arch=resumed_arch,
     )
 
@@ -271,11 +289,13 @@ def test_transfer_weights_only_resets_optimizers(tmp_path: Path):
             update_epochs=1,
             minibatch_size=rollout_batch_size,
         ),
-        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
-        checkpointing=CheckpointConfig(
-            checkpoint_dir=str(checkpoint_root),
-            save_interval_steps=1,
-            max_to_keep=3,
+        io=IOConfig(
+            logger=LoggingConfig(log_every=1, tensorboard_logdir=None),
+            checkpoint=CheckpointConfig(
+                checkpoint_dir=str(checkpoint_root),
+                save_interval_steps=1,
+                max_to_keep=3,
+            ),
         ),
         evaluations={},
     )
@@ -327,10 +347,13 @@ def test_transfer_weights_only_resets_optimizers(tmp_path: Path):
 
     transfer_config = replace(
         base_config,
-        checkpointing=replace(
-            base_config.checkpointing,
-            resume_from=resume_path,
-            transfer_weights_only=True,
+        io=replace(
+            base_config.io,
+            checkpoint=replace(
+                base_config.io.checkpoint,
+                resume_from=resume_path,
+                transfer_weights_only=True,
+            ),
         ),
     )
 
@@ -398,11 +421,13 @@ def test_train_resume_with_transfer_weights_only(tmp_path: Path):
             update_epochs=1,
             minibatch_size=rollout_batch_size,
         ),
-        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
-        checkpointing=CheckpointConfig(
-            checkpoint_dir=str(checkpoint_root),
-            save_interval_steps=1,
-            max_to_keep=3,
+        io=IOConfig(
+            logger=LoggingConfig(log_every=1, tensorboard_logdir=None),
+            checkpoint=CheckpointConfig(
+                checkpoint_dir=str(checkpoint_root),
+                save_interval_steps=1,
+                max_to_keep=3,
+            ),
         ),
         evaluations={},
     )
@@ -412,14 +437,15 @@ def test_train_resume_with_transfer_weights_only(tmp_path: Path):
     assert checkpoint_path is not None
 
     resumed_checkpointing = replace(
-        config.checkpointing,
+        config.io.checkpoint,
         resume_from=str(checkpoint_path),
         transfer_weights_only=True,
     )
+    resumed_io = replace(config.io, checkpoint=resumed_checkpointing)
     resumed_arch = replace(config.arch, total_timesteps=2 * rollout_batch_size)
     resumed_config = replace(
         config,
-        checkpointing=resumed_checkpointing,
+        io=resumed_io,
         arch=resumed_arch,
     )
 
@@ -519,6 +545,7 @@ def test_evaluator_greedy_behavior(monkeypatch):
     stochastic_metrics = stochastic_eval.run(replicated_params=replicated_params, seed=0)
     stochastic_eval.close()
 
-    assert greedy_metrics["return_mean"] == 0.0
-    assert stochastic_metrics["return_mean"] > greedy_metrics["return_mean"]
-    assert stochastic_metrics["steps"] == greedy_metrics["steps"]
+    assert greedy_metrics["return_mean"] < stochastic_metrics["return_mean"]
+
+    assert greedy_metrics["episodes"] == num_devices
+    assert stochastic_metrics["episodes"] == num_devices

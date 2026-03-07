@@ -11,7 +11,7 @@ def test_inject_run_id_mutates_checkpoint_dir_and_sets_tensorboard_run_name(monk
     updated, run_id = inject_run_id(config)
 
     assert run_id == "alphazero_run_alpha"
-    assert updated.checkpointing.checkpoint_dir.endswith(
+    assert updated.io.checkpoint.checkpoint_dir.endswith(
         "checkpoints/alphazero/run_alpha"
     )
     assert updated.io.name == "run_alpha"
@@ -30,7 +30,7 @@ def test_inject_run_id_preserves_tensorboard_name_when_requested(monkeypatch):
     )
 
     assert run_id == "ppo_ppo"
-    assert updated.checkpointing.checkpoint_dir.endswith(
+    assert updated.io.checkpoint.checkpoint_dir.endswith(
         "checkpoints/ppo/ppo"
     )
     assert updated.io.name == "ppo"
@@ -39,22 +39,22 @@ def test_inject_run_id_preserves_tensorboard_name_when_requested(monkeypatch):
 def test_inject_run_id_does_not_mutate_resume_from(monkeypatch):
     config = ExperimentConfig()
     config.system.name = "alphazero"
-    config.checkpointing.resume_from = "checkpoints/old/run/checkpoint_42"
+    config.io.checkpoint.resume_from = "checkpoints/old/run/checkpoint_42"
 
     updated, _ = inject_run_id(config)
 
-    assert updated.checkpointing.resume_from == "checkpoints/old/run/checkpoint_42"
+    assert updated.io.checkpoint.resume_from == "checkpoints/old/run/checkpoint_42"
 
 
 def test_detects_explicit_tensorboard_run_name_override_key():
     assert _has_explicit_tensorboard_run_name_override(
-        ["logging.tensorboard_run_name=my_run"]
+        ["io.logger.tensorboard_run_name=my_run"]
     )
     assert _has_explicit_tensorboard_run_name_override(
-        ["ppo.logging.tensorboard_run_name=my_run"]
+        ["ppo.io.logger.tensorboard_run_name=my_run"]
     )
     assert not _has_explicit_tensorboard_run_name_override(
-        ["logging.tensorboard_logdir=runs_tb"]
+        ["io.logger.tensorboard_logdir=runs_tb"]
     )
 
 
@@ -62,10 +62,10 @@ def test_inject_run_id_appends_checkpoint_name_when_set(monkeypatch):
     config = ExperimentConfig()
     config.system.name = "ppo"
     config.io.checkpoint.checkpoint_dir = "checkpoints"
-    config.checkpointing.checkpoint_name = "best-model:v1"
+    config.io.checkpoint.checkpoint_name = "best-model:v1"
 
     updated, _ = inject_run_id(config)
 
-    assert updated.checkpointing.checkpoint_dir.endswith(
+    assert updated.io.checkpoint.checkpoint_dir.endswith(
         "checkpoints/ppo/best_model_v1"
     )

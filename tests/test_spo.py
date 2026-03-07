@@ -9,6 +9,7 @@ from jax_rl.configs.config import (
     CheckpointConfig,
     EnvConfig,
     ExperimentConfig,
+    IOConfig,
     LoggingConfig,
     SystemConfig,
 )
@@ -118,8 +119,10 @@ def _make_config(num_particles=8, search_depth=4):
             sample_sequence_length=1,
             period=1,
         ),
-        checkpointing=CheckpointConfig(save_interval_steps=0),
-        logging=LoggingConfig(tensorboard_logdir=None),
+        io=IOConfig(
+            checkpoint=CheckpointConfig(save_interval_steps=0),
+            logger=LoggingConfig(tensorboard_logdir=None),
+        ),
         evaluations={},
         network={"_target_": "jax_rl.networks.PolicyValueModel", "hidden_sizes": [8]},
     )
@@ -212,8 +215,10 @@ def _make_uld_spo_setup(num_envs_per_device: int = 2):
         env=EnvConfig(env_name="rlpallet:UldEnv-v2", env_kwargs=env_kwargs),
         arch=ArchConfig(total_timesteps=16, num_envs=num_envs_per_device, num_steps=1),
         system=SystemConfig(name="spo", num_particles=32, search_depth=2),
-        logging=LoggingConfig(tensorboard_logdir=None),
-        checkpointing=CheckpointConfig(save_interval_steps=0),
+        io=IOConfig(
+            logger=LoggingConfig(tensorboard_logdir=None),
+            checkpoint=CheckpointConfig(save_interval_steps=0),
+        ),
         evaluations={},
     )
 
@@ -249,8 +254,10 @@ def _run_minimal_spo_uld_search_steps(num_steps: int = 4):
             period=1,
             learner_updates_per_cycle=1,
         ),
-        checkpointing=CheckpointConfig(save_interval_steps=0),
-        logging=LoggingConfig(tensorboard_logdir=None),
+        io=IOConfig(
+            checkpoint=CheckpointConfig(save_interval_steps=0),
+            logger=LoggingConfig(tensorboard_logdir=None),
+        ),
         evaluations={},
         network=config.network,
     )
@@ -450,8 +457,7 @@ def test_spo_one_step_rollout_samples_actions_from_post_resample_logits(monkeypa
             period=1,
             learner_updates_per_cycle=1,
         ),
-        checkpointing=config.checkpointing,
-        logging=config.logging,
+        io=config.io,
         evaluations=config.evaluations,
         network=config.network,
     )
@@ -634,8 +640,10 @@ def test_spo_integration_dry_run():
             period=1,
             learner_updates_per_cycle=1,
         ),
-        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
-        checkpointing=CheckpointConfig(save_interval_steps=0),
+        io=IOConfig(
+            logger=LoggingConfig(log_every=1, tensorboard_logdir=None),
+            checkpoint=CheckpointConfig(save_interval_steps=0),
+        ),
         network={
             "_target_": "jax_rl.networks.BinPackPolicyValueModel",
             "hidden_dim": 16,

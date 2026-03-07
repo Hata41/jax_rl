@@ -11,6 +11,7 @@ from jax_rl.configs.config import (
     CheckpointConfig,
     EnvConfig,
     ExperimentConfig,
+    IOConfig,
     LoggingConfig,
     SystemConfig,
 )
@@ -161,8 +162,10 @@ def test_train_pipeline_dry_run():
             update_epochs=1,
             minibatch_size=2,
         ),
-        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
-        checkpointing=CheckpointConfig(save_interval_steps=0),
+        io=IOConfig(
+            logger=LoggingConfig(log_every=1, tensorboard_logdir=None),
+            checkpoint=CheckpointConfig(save_interval_steps=0),
+        ),
         network={
             "_target_": "jax_rl.networks.BinPackPolicyValueModel",
             "hidden_dim": 16,
@@ -216,8 +219,10 @@ def test_train_pipeline_evaluators_closed(monkeypatch):
             update_epochs=1,
             minibatch_size=num_envs * 8,
         ),
-        logging=LoggingConfig(tensorboard_logdir=None),
-        checkpointing=CheckpointConfig(save_interval_steps=0),
+        io=IOConfig(
+            logger=LoggingConfig(tensorboard_logdir=None),
+            checkpoint=CheckpointConfig(save_interval_steps=0),
+        ),
         evaluations={
             "eval_1": {
                 "env_name": "CartPole-v1",

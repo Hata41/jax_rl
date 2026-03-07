@@ -31,8 +31,8 @@ def _has_explicit_tensorboard_run_name_override(overrides: list[str] | None) -> 
         return False
     for override in overrides:
         key = override.split("=", 1)[0].lstrip("+")
-        if key == "logging.tensorboard_run_name" or key.endswith(
-            ".logging.tensorboard_run_name"
+        if key == "io.logger.tensorboard_run_name" or key.endswith(
+            ".io.logger.tensorboard_run_name"
         ):
             return True
     return False
@@ -57,17 +57,13 @@ def inject_run_id(
 ) -> tuple[ExperimentConfig, str]:
     del preserve_tensorboard_run_name, run_name_override
 
-    if getattr(config, "checkpointing", None) is not None:
-        config.io.checkpoint = config.checkpointing
-        if config.io.name is None and getattr(config.checkpointing, "checkpoint_name", None):
-            config.io.name = str(config.checkpointing.checkpoint_name)
-    if getattr(config, "logging", None) is not None:
-        config.io.logger = config.logging
-        if config.io.name is None and getattr(config.logging, "tensorboard_run_name", None):
-            config.io.name = str(config.logging.tensorboard_run_name)
-
     system_name = _sanitize_run_token(str(config.system.name).lower())
-    io_name = _sanitize_run_token(str(config.io.name)) if config.io.name else system_name
+    raw_io_name = config.io.name
+    if raw_io_name is None and config.io.checkpoint.checkpoint_name:
+        raw_io_name = config.io.checkpoint.checkpoint_name
+    if raw_io_name is None and config.io.logger.tensorboard_run_name:
+        raw_io_name = config.io.logger.tensorboard_run_name
+    io_name = _sanitize_run_token(str(raw_io_name)) if raw_io_name else system_name
     checkpoint_path = Path(config.io.checkpoint.checkpoint_dir) / system_name / io_name
 
     config.io.checkpoint.checkpoint_dir = str(checkpoint_path)
@@ -107,14 +103,12 @@ def main(cfg: DictConfig) -> None:
         if isinstance(system_value, dict):
             payload["system"] = SystemConfig(**system_value)
 
-        checkpoint_value = payload.get("checkpointing")
-        logging_value = payload.get("logging")
         io_value = payload.get("io")
 
-        if io_value is not None and (checkpoint_value is not None or logging_value is not None):
+        if "checkpointing" in payload or "logging" in payload:
             raise ValueError(
-                "Config defines both legacy keys ('logging'/'checkpointing') and new key ('io'). "
-                "Use only 'io'."
+                "Legacy keys 'checkpointing' and 'logging' are not supported. "
+                "Use 'io.checkpoint' and 'io.logger' instead."
             )
 
         if isinstance(io_value, dict):
@@ -126,22 +120,8 @@ def main(cfg: DictConfig) -> None:
             if isinstance(logger_payload, dict):
                 io_payload["logger"] = LoggerConfig(**logger_payload)
             payload["io"] = IOConfig(**io_payload)
-        elif io_value is None and (checkpoint_value is not None or logging_value is not None):
-            io_payload: dict[str, Any] = {}
-            if isinstance(checkpoint_value, dict):
-                io_payload["checkpoint"] = CheckpointConfig(**checkpoint_value)
-                legacy_checkpoint_name = checkpoint_value.get("checkpoint_name")
-                if legacy_checkpoint_name:
-                    io_payload["name"] = str(legacy_checkpoint_name)
-            if isinstance(logging_value, dict):
-                io_payload["logger"] = LoggerConfig(
-                    log_every=int(logging_value.get("log_every", 10)),
-                    tensorboard_logdir=logging_value.get("tensorboard_logdir"),
-                )
-                legacy_tb_name = logging_value.get("tensorboard_run_name")
-                if legacy_tb_name and "name" not in io_payload:
-                    io_payload["name"] = str(legacy_tb_name)
-            payload["io"] = IOConfig(**io_payload)
+        elif io_value is None:
+            payload["io"] = IOConfig()
 
         return ExperimentConfig(**payload)
     expected_keys = {

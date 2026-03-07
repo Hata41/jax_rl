@@ -79,31 +79,49 @@ def resolve_resume_from(
     elif len(target.parts) > 1:
         return str(target)
 
-    checkpoint_root, env_token = _infer_checkpoint_root_and_env(checkpoint_dir, env_name)
-    base = checkpoint_root / resolved_algo / env_token
-    if not base.is_dir():
-        return str(target)
+    def _resolve_leaf_under_base(base_dir: Path, leaf: str) -> str | None:
+        direct_leaf = base_dir / leaf
+        if direct_leaf.is_dir():
+            has_numeric_step = any(
+                child.is_dir() and child.name.isdigit() for child in direct_leaf.iterdir()
+            )
+            if has_numeric_step:
+                return str(direct_leaf)
+            fallback = str(direct_leaf)
+        else:
+            fallback = None
 
-    candidate_runs = sorted(
-        [run_dir for run_dir in base.iterdir() if run_dir.is_dir()],
-        key=lambda path: path.name,
-        reverse=True,
-    )
-    fallback_leaf: str | None = None
-    for run_dir in candidate_runs:
-        leaf = run_dir / leaf_name
-        if not leaf.is_dir():
-            continue
-        if fallback_leaf is None:
-            fallback_leaf = str(leaf)
-        has_numeric_step = any(
-            child.is_dir() and child.name.isdigit() for child in leaf.iterdir()
+        candidate_runs = sorted(
+            [run_dir for run_dir in base_dir.iterdir() if run_dir.is_dir()],
+            key=lambda path: path.name,
+            reverse=True,
         )
-        if has_numeric_step:
-            return str(leaf)
+        for run_dir in candidate_runs:
+            leaf_dir = run_dir / leaf
+            if not leaf_dir.is_dir():
+                continue
+            if fallback is None:
+                fallback = str(leaf_dir)
+            has_numeric_step = any(
+                child.is_dir() and child.name.isdigit() for child in leaf_dir.iterdir()
+            )
+            if has_numeric_step:
+                return str(leaf_dir)
 
-    if fallback_leaf is not None:
-        return fallback_leaf
+        return fallback
+
+    checkpoint_root, env_token = _infer_checkpoint_root_and_env(checkpoint_dir, env_name)
+    env_base = checkpoint_root / resolved_algo / env_token
+    if env_base.is_dir():
+        resolved = _resolve_leaf_under_base(env_base, leaf_name)
+        if resolved is not None:
+            return resolved
+
+    flat_base = checkpoint_root / resolved_algo
+    if flat_base.is_dir():
+        resolved = _resolve_leaf_under_base(flat_base, leaf_name)
+        if resolved is not None:
+            return resolved
 
     return str(target)
 

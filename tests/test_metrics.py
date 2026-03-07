@@ -4,7 +4,7 @@ import importlib
 from dataclasses import replace
 from types import SimpleNamespace
 
-from jax_rl.configs.config import ArchConfig, EnvConfig, ExperimentConfig, LoggingConfig, SystemConfig
+from jax_rl.configs.config import ArchConfig, EnvConfig, ExperimentConfig, IOConfig, LoggingConfig, SystemConfig
 from jax_rl.systems.ppo.eval import EvaluationManager
 from jax_rl.systems.ppo.anakin.system import (
     train,
@@ -26,13 +26,13 @@ def _tiny_config(**overrides):
             minibatch_size=num_envs * 8,
             update_epochs=2,
         ),
-        logging=LoggingConfig(log_every=1),
+        io=IOConfig(logger=LoggingConfig(log_every=1)),
         evaluations={},
     )
 
     updated_config = config
     for key, value in overrides.items():
-        if key in {"env", "arch", "system", "checkpointing", "logging"} and isinstance(value, dict):
+        if key in {"env", "arch", "system", "io"} and isinstance(value, dict):
             nested_config = getattr(updated_config, key)
             updated_config = replace(updated_config, **{key: replace(nested_config, **value)})
             continue
@@ -285,7 +285,7 @@ def test_spo_metric_prefix_enforcement_with_eval(monkeypatch):
         env=EnvConfig(env_name="CartPole-v1", seed=0),
         arch=ArchConfig(total_timesteps=num_envs, num_envs=num_envs, num_steps=1),
         system=SystemConfig(name="spo", learner_updates_per_cycle=1),
-        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
+        io=IOConfig(logger=LoggingConfig(log_every=1, tensorboard_logdir=None)),
         evaluations={
             "eval_1": {
                 "env_name": "CartPole-v1",
@@ -407,7 +407,7 @@ def test_alphazero_metric_prefix_enforcement_with_eval(monkeypatch):
         env=EnvConfig(env_name="CartPole-v1", seed=0),
         arch=ArchConfig(total_timesteps=num_envs, num_envs=num_envs, num_steps=1),
         system=SystemConfig(name="alphazero", learner_updates_per_cycle=1),
-        logging=LoggingConfig(log_every=1, tensorboard_logdir=None),
+        io=IOConfig(logger=LoggingConfig(log_every=1, tensorboard_logdir=None)),
         evaluations={
             "eval_1": {
                 "env_name": "CartPole-v1",
